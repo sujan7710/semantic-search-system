@@ -257,23 +257,25 @@ Scikit-learn
 NumPy
 
 ## Project Structure
-semantic-search-system
+```
+semantic-search-system/
 │
-├── app.py                # FastAPI server
-├── main.py               # CLI testing entry
+├── app.py               # FastAPI server
+├── main.py              # CLI testing entry
 │
-├── dataset_loader.py     # dataset ingestion
-├── preprocessing.py      # text cleaning
-├── embeddings.py         # embedding model wrapper
-├── vector_store.py       # FAISS index
-├── clustering.py         # fuzzy clustering (GMM)
-├── semantic_cache.py     # semantic cache logic
+├── dataset_loader.py    # Dataset ingestion
+├── preprocessing.py     # Text cleaning
+├── embeddings.py        # Embedding model wrapper
+├── vector_store.py      # FAISS index
+├── clustering.py        # Fuzzy clustering (GMM)
+├── semantic_cache.py    # Semantic cache logic
 │
-├── embeddings.npy        # persisted embeddings
-├── gmm_model.pkl         # saved clustering model
+├── embeddings.npy       # Persisted embeddings
+├── gmm_model.pkl        # Saved clustering model
 │
 ├── requirements.txt
 └── README.md
+```
 
 ## Future Improvements
 
