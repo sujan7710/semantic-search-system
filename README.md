@@ -216,6 +216,18 @@ Clone repository:
 git clone https://github.com/sujan7710/semantic-search-system.git
 cd semantic-search-system
 
+## Virtual Environment Setup
+
+Create a virtual environment:
+
+```bash
+python -m venv venv
+
+Activate the environment.
+
+Windows:
+venv\Scripts\activate
+
 Install dependencies:
 
 pip install -r requirements.txt
