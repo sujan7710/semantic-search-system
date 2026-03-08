@@ -82,7 +82,7 @@ Endpoints:
 
 Input:
 
-```json
+
 {
   "query": "space rocket launch"
 }
@@ -110,7 +110,7 @@ Returns cache statistics.
 DELETE /cache
 
 Clears the semantic cache.
-```json
+
 
 Dataset
 
