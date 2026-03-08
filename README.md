@@ -110,6 +110,7 @@ Returns cache statistics.
 DELETE /cache
 
 Clears the semantic cache.
+```json
 
 Dataset
 
