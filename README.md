@@ -8,7 +8,7 @@ The system exposes a **FastAPI service** that allows users to query documents us
 ---
 
 # System Overview
-
+```
 The system pipeline:
 
 User Query
@@ -23,6 +23,7 @@ Cache Miss → FAISS Vector Search
 Determine Dominant Cluster
    ↓
 Store Result in Cache
+```
 
 ---
 
