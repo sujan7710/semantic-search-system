@@ -235,7 +235,9 @@ pip install -r requirements.txt
 
 Start the server:
 
+```bash
 uvicorn app:app --reload
+```
 
 Open API docs:
 
