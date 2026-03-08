@@ -1,7 +1,9 @@
 # Semantic Search System with Fuzzy Clustering and Semantic Cache
 
-This project implements a lightweight semantic search system using the **20 Newsgroups dataset**.  
-The system combines **vector embeddings, fuzzy clustering, semantic caching, and a FastAPI service** to efficiently retrieve semantically similar documents.
+This project implements a lightweight **semantic search system** built on the **20 Newsgroups dataset**.  
+It combines **sentence embeddings, vector similarity search, fuzzy clustering, and a semantic cache layer** to retrieve semantically relevant documents efficiently.
+
+The system exposes a **FastAPI service** that allows users to query documents using natural language.
 
 ---
 
@@ -9,18 +11,18 @@ The system combines **vector embeddings, fuzzy clustering, semantic caching, and
 
 The system pipeline:
 
-User Query  
-↓  
-Sentence Embedding  
-↓  
-Semantic Cache Check  
-↓  
-Cache Hit → Return Cached Result  
-Cache Miss → FAISS Vector Search  
-↓  
-Determine Dominant Cluster  
-↓  
-Store Result in Cache  
+User Query
+   ↓
+Sentence Embedding
+   ↓
+Semantic Cache Check
+   ↓
+Cache Hit → Return Cached Result
+Cache Miss → FAISS Vector Search
+   ↓
+Determine Dominant Cluster
+   ↓
+Store Result in Cache
 
 ---
 
@@ -211,8 +213,10 @@ The dataset contains ~20,000 documents across 20 topic categories.
 
 Clone repository:
 
+```bash
 git clone https://github.com/sujan7710/semantic-search-system.git
 cd semantic-search-system
+```
 
 ## Virtual Environment Setup
 
@@ -246,16 +250,43 @@ http://127.0.0.1:8000/docs
 ## Technologies Used:
 
 Python
-
 FastAPI
-
 Sentence Transformers
-
 FAISS
-
 Scikit-learn
-
 NumPy
 
+## Project Structure
+semantic-search-system
+│
+├── app.py                # FastAPI server
+├── main.py               # CLI testing entry
+│
+├── dataset_loader.py     # dataset ingestion
+├── preprocessing.py      # text cleaning
+├── embeddings.py         # embedding model wrapper
+├── vector_store.py       # FAISS index
+├── clustering.py         # fuzzy clustering (GMM)
+├── semantic_cache.py     # semantic cache logic
+│
+├── embeddings.npy        # persisted embeddings
+├── gmm_model.pkl         # saved clustering model
+│
+├── requirements.txt
+└── README.md
 
+## Future Improvements
 
+Possible improvements for production systems:
+
+- Cluster-aware cache lookup to further improve retrieval efficiency.
+- Approximate nearest neighbor search for very large datasets.
+- Docker containerization for easier deployment.
+- Deployment on cloud platforms (AWS / GCP).
+- Monitoring cache performance and adaptive similarity thresholds.
+
+## Author
+
+Sujan M  
+B.Tech Computer Science  
+VIT Vellore
