@@ -80,39 +80,52 @@ Endpoints:
 
 ### POST /query
 
-Input:
+### POST /query
 
+**Input**
 
+```json
 {
   "query": "space rocket launch"
 }
-output:
+```
+
+**Output**
+
+```json
 {
-  "query": "...",
+  "query": "space rocket launch",
   "cache_hit": true,
-  "matched_query": "...",
+  "matched_query": "rocket launch in space",
   "similarity_score": 0.91,
   "result": "...",
   "dominant_cluster": 3
 }
+```
 
-GET /cache/stats
+---
+
+### GET /cache/stats
 
 Returns cache statistics.
 
+```json
 {
   "total_entries": 42,
   "hit_count": 17,
   "miss_count": 25,
   "hit_rate": 0.405
 }
+```
 
-DELETE /cache
+---
+
+### DELETE /cache
 
 Clears the semantic cache.
 
 
-Dataset
+## 5.Dataset
 
 The system uses the 20 Newsgroups dataset:
 
@@ -120,7 +133,7 @@ https://archive.ics.uci.edu/dataset/113/twenty+newsgroups
 
 The dataset contains ~20,000 documents across 20 topic categories.
 
-Installation
+## 6.Installation
 
 Clone repository:
 
@@ -131,7 +144,7 @@ Install dependencies:
 
 pip install -r requirements.txt
 
-Running the API
+## 7.Running the API
 
 Start the server:
 
@@ -141,7 +154,7 @@ Open API docs:
 
 http://127.0.0.1:8000/docs
 
-Technologies Used
+## 8.Technologies Used:
 
 Python
 
