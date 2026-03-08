@@ -158,8 +158,6 @@ Endpoints:
 
 ### POST /query
 
-### POST /query
-
 **Input**
 
 ```json
