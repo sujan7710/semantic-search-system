@@ -3,8 +3,6 @@
 This project implements a lightweight semantic search system using the **20 Newsgroups dataset**.  
 The system combines **vector embeddings, fuzzy clustering, semantic caching, and a FastAPI service** to efficiently retrieve semantically similar documents.
 
-This project was developed as part of the **Trademarkia AI/ML Engineer Assignment**.
-
 ---
 
 # System Overview
@@ -222,6 +220,7 @@ Create a virtual environment:
 
 ```bash
 python -m venv venv
+```
 
 Activate the environment.
 
