@@ -65,7 +65,7 @@ For this dataset (~20k vectors), the IndexFlatL2 index was selected since it per
 
 ## Fuzzy Clustering Approach
 
-The assignment requires soft clustering rather than hard cluster assignments.
+This requires soft clustering rather than hard cluster .
 
 To satisfy this requirement, the system uses:
 
