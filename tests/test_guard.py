@@ -118,7 +118,7 @@ def test_plain_cache_reuses_negated_question_but_guard_does_not(service):
     body = guarded.post("/query", json=negated).json()
     assert body["cache_hit"] is False
     assert body["decision"] == {"stage": "rules", "reason": "negation", "verifier_score": None,
-                                "decision_ms": body["decision"]["decision_ms"]}
+                                "decision_ms": body["decision"]["decision_ms"], "guarded": True}
 
     paraphrase = guarded.post("/query", json={"query": "how do I cancel my order please"}).json()
     assert paraphrase["cache_hit"] is True

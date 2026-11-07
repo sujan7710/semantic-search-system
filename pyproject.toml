@@ -12,6 +12,7 @@ dependencies = [
     "fastapi==0.135.1",
     "uvicorn==0.41.0",
     "pydantic==2.12.5",
+    "httpx==0.28.1",
     "sentence-transformers==5.2.3",
     "faiss-cpu==1.13.2",
     "scikit-learn==1.8.0",
@@ -32,6 +33,9 @@ bench = [
 
 [tool.setuptools.packages.find]
 include = ["cacheguard*"]
+
+[tool.setuptools.package-data]
+cacheguard = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

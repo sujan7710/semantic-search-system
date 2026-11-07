@@ -2,9 +2,9 @@
 
 **A semantic cache that knows when it's wrong.**
 
-CacheGuard sits in front of an answer backend (today a document search, later an LLM via Groq). When a new question means the same thing as one it has already answered, it returns the saved answer instantly instead of calling the backend again. The goal of the project is to do that *without* serving wrong answers for questions that look alike but are different ("cancel my order" vs "don't cancel my order"), and to measure exactly how often that happens.
+CacheGuard sits in front of an LLM API (Groq). When a new question means the same thing as one it has already answered, it returns the saved answer instantly instead of paying for another AI call. The point of the project is to do that *without* serving wrong answers for questions that look alike but are different ("cancel my order" vs "don't cancel my order"), and to measure exactly how often that happens.
 
-> **Status: Phase 3 (the guard).** The project grew out of a 20 Newsgroups semantic search system (preserved at the git tag `v0-newsgroups-search`). Phase 0 restructured it and fixed measured bugs; Phase 1 measured how often a fixed-threshold cache serves wrong answers; Phase 2 made the cache a real store; Phase 3 added the guard that decides when reuse is safe. See [Roadmap](#roadmap).
+> **Status: Phase 4 (gateway and demo).** The project grew out of a 20 Newsgroups semantic search system (preserved at the git tag `v0-newsgroups-search`). Phase 0 restructured it and fixed measured bugs; Phase 1 measured how often a fixed-threshold cache serves wrong answers; Phase 2 made the cache a real store; Phase 3 added the guard that decides when reuse is safe; Phase 4 put it in front of Groq with an OpenAI-compatible API and a demo chat page. See [Roadmap](#roadmap).
 
 ## Result
 
@@ -61,18 +61,20 @@ question + namespace
 pip install -e ".[dev]"
 ```
 
-Download the [20 Newsgroups dataset](https://archive.ics.uci.edu/dataset/113/twenty+newsgroups) and extract it so the folders are at `data/20_newsgroups/<newsgroup>/`.
+Copy `.env.example` to `.env` and set `GROQ_API_KEY` (from the [Groq console](https://console.groq.com/keys)). `.env` is git-ignored.
 
-Build the search index (embeds ~19k documents; takes a few minutes on CPU):
-
-```bash
-python -m cacheguard.build
-```
-
-Run the API, then open http://127.0.0.1:8000/docs:
+Run the server, then open the demo at http://127.0.0.1:8000/ (API docs at `/docs`). The first start downloads the embedding model and the cross-encoder (~420 MB):
 
 ```bash
 uvicorn cacheguard.api:create_default_app --factory
+```
+
+### Without a Groq key
+
+CacheGuard falls back to the original 20 Newsgroups search as its backend. Download the [20 Newsgroups dataset](https://archive.ics.uci.edu/dataset/113/twenty+newsgroups), extract it so the folders are at `data/20_newsgroups/<newsgroup>/`, and build the search index (embeds ~19k documents; ~12 minutes on CPU):
+
+```bash
+python -m cacheguard.build
 ```
 
 Or use the terminal client:
@@ -109,12 +111,29 @@ pytest
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/query` | Answer a query (optional `namespace`), from cache when possible |
-| `GET` | `/cache/stats` | Totals and per-partition entries, hits, misses, evictions, expirations, invalidations |
-| `DELETE` | `/cache` | Clear the cache |
-| `DELETE` | `/cache/entries/{id}` | Remove one cached answer |
-| `POST` | `/cache/invalidate` | Remove all answers for `{"tag": "source:1234"}` or `{"namespace": "team-a"}` |
+| `GET` | `/` | Demo chat page |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible drop-in (non-streaming); the reply adds a `cacheguard` field |
+| `POST` | `/query` | Ask a question (optional `namespace`, `cache`, `guard`); explains every decision |
+| `POST` | `/explain` | Dry run: what a plain threshold and the guard would decide now. No AI call, nothing stored |
+| `GET` | `/stats` | Hits, decisions by reason, tokens and dollars saved, daily budget left |
+| `GET` | `/cache/stats` | Per-partition store counters |
+| `DELETE` | `/cache` | Clear the cache (admin) |
+| `DELETE` | `/cache/entries/{id}` | Remove one cached answer (admin) |
+| `POST` | `/cache/invalidate` | Remove all answers for `{"tag": "model:…"}` or `{"namespace": "team-a"}` (admin, except a visitor's own `demo-…` namespace) |
 | `GET` | `/health` | Liveness, backend name, entry count, active guard settings |
+
+Any OpenAI client can point at CacheGuard by changing its base URL:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="unused")
+reply = client.chat.completions.create(
+    model="openai/gpt-oss-20b",
+    messages=[{"role": "user", "content": "How do I make my laptop battery last longer?"}],
+)
+print(reply.choices[0].message.content)
+```
 
 `POST /query` with `{"query": "Is five hours of sleep sufficient?"}` (after `"Is 5 hours of sleep enough?"` was asked) returns:
 
@@ -153,6 +172,16 @@ Environment variables (defaults in [config.py](cacheguard/config.py)):
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `GROQ_API_KEY` | (none) | Groq key; with it the backend is Groq, without it the newsgroups search |
+| `CACHEGUARD_BACKEND` | `auto` | `auto`, `groq` or `newsgroups` |
+| `CACHEGUARD_GROQ_MODEL` | `openai/gpt-oss-20b` | Any Groq chat model id |
+| `CACHEGUARD_SYSTEM_PROMPT` | concise assistant | Part of the cache key: changing it starts a fresh partition |
+| `CACHEGUARD_TEMPERATURE` | `0` | Cached answers assume deterministic generation; requests asking for another temperature bypass the cache |
+| `CACHEGUARD_PRICE_INPUT_PER_M` / `_OUTPUT_PER_M` | `0.075` / `0.30` | USD per 1M tokens, for the "saved" numbers |
+| `CACHEGUARD_RATE_LIMIT_PER_MINUTE` | `30` | Per client IP on `/query`, `/explain`, `/v1/chat/completions` |
+| `CACHEGUARD_DAILY_BACKEND_CALLS` | `500` | AI calls per UTC day; cache hits keep working after it is spent |
+| `CACHEGUARD_TRUST_PROXY` | `off` | Read the client IP from `X-Forwarded-For` (when behind a hosting proxy) |
+| `CACHEGUARD_ADMIN_TOKEN` | (none) | If set, cache admin endpoints need header `X-Admin-Token` |
 | `CACHEGUARD_GUARD` | `on` | `off` uses the plain threshold below instead of the guard |
 | `CACHEGUARD_GUARD_DIR` | `configs/guard` | Calibrated guard settings |
 | `CACHEGUARD_VERIFIER_MODEL` | `cross-encoder/quora-distilroberta-base` | Used if the guard config does not name one |
@@ -176,7 +205,9 @@ cacheguard/
   partitions.py      exact-match partition keys (namespace, backend, model settings)
   cache.py           original list cache, kept as the benchmark baseline
   clustering.py      Gaussian mixture soft clustering, saved as .npz (no pickle)
-  backends/          what answers on a cache miss (newsgroups search for now)
+  backends/          what answers on a cache miss: groq.py (LLM), newsgroups.py (search)
+  limits.py          per-client rate limit and daily AI-call budget
+  static/demo.html   the demo page (no build step, no external assets)
   data/newsgroups.py loading, cleaning and de-duplicating the corpus
   artifacts.py       build/save/load the precomputed index, with a manifest
   service.py         the request path: embed, look up, answer, store
@@ -251,6 +282,16 @@ What the experiments showed:
 - **Rules alone are not enough.** Rules plus the best threshold, without the cross-encoder, reached only 10.3% hits at a 15% budget.
 - **Open limitations.** The verifier is trained on QQP (train split; tests use validation), so these numbers are in-domain. On PAWS word-order swaps it is worse than embeddings (AUC 0.57 vs 0.63). It runs on ~60% of lookups, adding ~31 ms each; a smaller or quantized verifier, or a calibrated `skip_verify_above`, would cut that.
 
+## Phase 4: gateway and demo
+
+**Groq backend** ([groq.py](cacheguard/backends/groq.py)). Plain `httpx` against Groq's OpenAI-compatible endpoint: retries with backoff on 429/5xx and timeouts (honoring `Retry-After`, capped at 5 s), no retries on client errors such as a bad key, and token usage and cost kept with each cached answer, so a later hit knows exactly what it saved.
+
+**What makes two requests share an answer.** Only the *last user question* is matched by meaning. Everything else is matched exactly and becomes part of the partition key: namespace, backend, model, system prompt, temperature, max tokens, and a hash of the earlier conversation turns. So "how do I install it?" after a Python conversation never gets the answer from a Docker conversation. Requests with a different temperature bypass the cache.
+
+**Public demo protection.** Per-IP rate limit; a daily AI-call budget that cache hits don't consume (when it runs out, cached answers still work and new questions get a clear message); failed AI calls refund the budget; admin token for cache administration; visitors can only reset their own `demo-…` namespace.
+
+**The demo page** (`GET /`). A chat with a live "Why?" panel. For every answer it shows whether it came from cache, the closest cached question, similarity against the gate, and which check passed or failed (gate, rules, verifier with its score). Before each question it calls `/explain`, so it can also show what a plain similarity cache would have done. For example, "Is 8 hours of sleep enough?" after "Is 5 hours…": *"Without the guard, a plain similarity cache (threshold 0.85) would have answered with the cached reply to 'Is 5 hours of sleep enough for an adult?'. That would have been the wrong answer."* Suggested questions walk through a paraphrase hit, a different device, a negation and a swapped number. Each visitor gets a private namespace. The page works at phone width and includes a dark theme.
+
 ## Roadmap
 
 | Phase | Goal |
@@ -259,10 +300,10 @@ What the experiments showed:
 | 1 | Benchmark harness: paraphrase datasets (QQP, PAWS) and hard negatives; measure the baseline cache's hit rate vs wrong-hit rate *(done)* |
 | 2 | Cache core: FAISS-backed cache, persistence, expiry and eviction, partitioning by model/tenant *(done)* |
 | 3 | Correctness: calibrated guard with rules and a cross-encoder verifier; per-cluster settings tested *(done)* |
-| 4 | Gateway: Groq LLM backend, OpenAI-compatible API, demo chat page |
+| 4 | Gateway: Groq LLM backend, OpenAI-compatible API, demo chat page, demo protection *(done; live Groq run pending a key)* |
 | 5 | Operations: metrics, dashboard, load tests, Docker, deployment |
 | 6 | Write-up: results, design decisions, what didn't work |
 
 ## Tech
 
-Python, FastAPI, sentence-transformers (`all-MiniLM-L6-v2` embeddings, `quora-distilroberta-base` cross-encoder), FAISS, SQLite, scikit-learn, NumPy, pytest.
+Python, FastAPI, Groq (OpenAI-compatible API via httpx), sentence-transformers (`all-MiniLM-L6-v2` embeddings, `quora-distilroberta-base` cross-encoder), FAISS, SQLite, scikit-learn, NumPy, pytest.

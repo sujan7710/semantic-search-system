@@ -27,7 +27,10 @@ class NewsgroupsSearchBackend:
             return text
         return text[: self.snippet_chars].rsplit(" ", 1)[0] + "..."
 
-    def respond(self, query: str, query_embedding: np.ndarray) -> BackendResponse:
+    def cache_settings(self) -> dict:
+        return {}  # the corpus is fixed; top_k and snippet length only change presentation
+
+    def respond(self, query: str, query_embedding: np.ndarray, history: Sequence[dict] = ()) -> BackendResponse:
         scores, ids = self._index.search(query_embedding, self.top_k)
         sources = tuple(
             Source(
