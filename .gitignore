@@ -6,10 +6,10 @@ __pycache__/
 .env
 
 # Raw dataset (download separately, see README)
-data/
+/data/
 
 # Generated index files: rebuild with `python -m cacheguard.build`
-artifacts/
+/artifacts/
 *.npy
 *.npz
 *.pkl
