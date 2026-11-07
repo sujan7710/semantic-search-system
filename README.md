@@ -290,7 +290,20 @@ What the experiments showed:
 
 **Public demo protection.** Per-IP rate limit; a daily AI-call budget that cache hits don't consume (when it runs out, cached answers still work and new questions get a clear message); failed AI calls refund the budget; admin token for cache administration; visitors can only reset their own `demo-…` namespace.
 
-**The demo page** (`GET /`). A chat with a live "Why?" panel. For every answer it shows whether it came from cache, the closest cached question, similarity against the gate, and which check passed or failed (gate, rules, verifier with its score). Before each question it calls `/explain`, so it can also show what a plain similarity cache would have done. For example, "Is 8 hours of sleep enough?" after "Is 5 hours…": *"Without the guard, a plain similarity cache (threshold 0.85) would have answered with the cached reply to 'Is 5 hours of sleep enough for an adult?'. That would have been the wrong answer."* Suggested questions walk through a paraphrase hit, a different device, a negation and a swapped number. Each visitor gets a private namespace. The page works at phone width and includes a dark theme.
+**The demo page** (`GET /`). A chat with a live "Why?" panel. For every answer it shows whether it came from cache, the closest cached question, similarity against the gate, and which check passed or failed (gate, rules, verifier with its score). Before each question it calls `/explain`, so it can also show what a plain similarity cache would have done. For example, "Is 8 hours of sleep enough?" after "Is 5 hours…": *"Without the guard, a plain similarity cache (threshold 0.85) would have answered with the cached reply to 'Is 5 hours of sleep enough for an adult?'. That would have been the wrong answer."* Suggested questions walk through a paraphrase hit, a different device, a negation and a swapped number. Each visitor gets a private namespace. The page works at phone width and includes a dark theme. Model answers are rendered from Markdown by a small renderer that only creates text nodes, so model output cannot inject markup.
+
+**Live run against Groq** (`openai/gpt-oss-20b`, Nov 2026, fresh cache):
+
+| Question (in order) | Result | Detail |
+|---|---|---|
+| How do I make my laptop battery last longer? | AI call | 432 tokens, 595 ms |
+| How can I extend my laptop's battery life? | **cache hit** | verifier 0.975; **10 ms** instead of ~600 ms |
+| How do I make my phone battery last longer? | refused, AI call | verifier 0.002. A plain 0.85-threshold cache would have served the laptop answer |
+| Why doesn't my laptop battery last long? | refused, AI call | negation rule |
+| Is 5 hours of sleep enough for an adult? | AI call | below gate vs everything cached |
+| Is 8 hours of sleep enough for an adult? | refused, AI call | number rule. A plain cache would have served the 5-hour answer |
+| Is five hours of sleep sufficient for adults? | **cache hit** | verifier 0.988; "five" = "5" |
+| `/v1/chat/completions`: "What is the capital of Australia?" then "Which city is Australia's capital?" | AI call, then **cache hit** | second reply: 0 tokens used |
 
 ## Roadmap
 
@@ -300,7 +313,7 @@ What the experiments showed:
 | 1 | Benchmark harness: paraphrase datasets (QQP, PAWS) and hard negatives; measure the baseline cache's hit rate vs wrong-hit rate *(done)* |
 | 2 | Cache core: FAISS-backed cache, persistence, expiry and eviction, partitioning by model/tenant *(done)* |
 | 3 | Correctness: calibrated guard with rules and a cross-encoder verifier; per-cluster settings tested *(done)* |
-| 4 | Gateway: Groq LLM backend, OpenAI-compatible API, demo chat page, demo protection *(done; live Groq run pending a key)* |
+| 4 | Gateway: Groq LLM backend, OpenAI-compatible API, demo chat page, demo protection *(done)* |
 | 5 | Operations: metrics, dashboard, load tests, Docker, deployment |
 | 6 | Write-up: results, design decisions, what didn't work |
 

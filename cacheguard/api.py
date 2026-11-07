@@ -185,7 +185,8 @@ def create_app(service: CacheGuardService, settings: Settings | None = None) -> 
 
     @app.get("/", include_in_schema=False)
     def demo_page() -> FileResponse:
-        return FileResponse(_STATIC / "demo.html", media_type="text/html")
+        # no-cache: browsers revalidate, so visitors see a new page right after a deploy.
+        return FileResponse(_STATIC / "demo.html", media_type="text/html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/health")
     def health() -> dict:
