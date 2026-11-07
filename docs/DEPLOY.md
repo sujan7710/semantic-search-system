@@ -91,7 +91,22 @@ reflect what was checked when this was written (November 2026).
 
 ### Deploy
 
-From the repository root (Cloud Build builds the Dockerfile remotely; the first build takes several minutes):
+The simplest way, with nothing installed locally: open [Cloud Shell](https://shell.cloud.google.com/) (gcloud is
+preinstalled and signed in), then:
+
+```bash
+git clone --depth 1 --branch phase-5-ops https://github.com/sujan7710/semantic-search-system.git cacheguard
+```
+
+```bash
+cd cacheguard && bash deploy/cloudrun.sh
+```
+
+[deploy/cloudrun.sh](../deploy/cloudrun.sh) enables the services, checks the two secrets exist and grants the service
+read access, deploys with the flags below, and finally checks that a forged `X-Forwarded-For` cannot dodge the rate
+limit (it reads the admin token from Secret Manager itself, so the token is never printed).
+
+The deploy command it runs, for reference (Cloud Build builds the Dockerfile remotely; the first build takes several minutes):
 
 ```bash
 gcloud run deploy cacheguard --source . --region us-central1 --port 8000 --memory 2Gi --cpu 1 --cpu-boost --concurrency 8 --min-instances 0 --max-instances 2 --timeout 60 --allow-unauthenticated --set-env-vars CACHEGUARD_PROXY_HOPS=1,CACHEGUARD_DAILY_BACKEND_CALLS=300,CACHEGUARD_RATE_LIMIT_PER_MINUTE=30 --set-secrets GROQ_API_KEY=groq-api-key:latest,CACHEGUARD_ADMIN_TOKEN=cacheguard-admin-token:latest
