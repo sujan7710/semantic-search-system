@@ -6,4 +6,4 @@ decides whether a cached answer may be reused. Backends: Groq, the original
 20 Newsgroups search, and a mock for load tests.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
