@@ -1,7 +1,9 @@
-"""CacheGuard: a semantic cache that sits in front of an answer backend.
+"""CacheGuard: a semantic cache for LLM APIs that knows when it's wrong.
 
-Phase 0 ships the original 20 Newsgroups search as the backend; later phases
-swap in an LLM (Groq) behind the same interface.
+Questions are matched by meaning (MiniLM + FAISS) inside exact partitions,
+and a calibrated guard (similarity gate, swap rules, cross-encoder verifier)
+decides whether a cached answer may be reused. Backends: Groq, the original
+20 Newsgroups search, and a mock for load tests.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
