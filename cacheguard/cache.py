@@ -43,7 +43,9 @@ class SemanticCache:
         self._lock = threading.Lock()
         self._ids = itertools.count(1)
         self._entries: list[CacheEntry] = []
-        self._matrix: np.ndarray | None = None  # stacked embeddings, rebuilt lazily
+        # Embeddings live in a buffer that doubles when full, so adding is
+        # amortized O(1) instead of re-stacking every entry after each insert.
+        self._matrix: np.ndarray | None = None
         self._hits = 0
         self._misses = 0
 
@@ -56,9 +58,7 @@ class SemanticCache:
             if not self._entries:
                 self._misses += 1
                 return CacheLookup(hit=False, entry=None, similarity=None)
-            if self._matrix is None:
-                self._matrix = np.stack([e.embedding for e in self._entries])
-            similarities = self._matrix @ query
+            similarities = self._matrix[: len(self._entries)] @ query
             best = int(np.argmax(similarities))
             similarity = float(similarities[best])
             if similarity >= self.threshold:
@@ -77,8 +77,17 @@ class SemanticCache:
             created_at=time.time(),
         )
         with self._lock:
+            n = len(self._entries)
+            if self._matrix is None or self._matrix.shape[1] != entry.embedding.shape[0]:
+                if n:
+                    raise ValueError("embedding dimension does not match cached entries")
+                self._matrix = np.empty((16, entry.embedding.shape[0]), dtype=np.float32)
+            elif n == self._matrix.shape[0]:
+                grown = np.empty((2 * n, self._matrix.shape[1]), dtype=np.float32)
+                grown[:n] = self._matrix
+                self._matrix = grown
+            self._matrix[n] = entry.embedding
             self._entries.append(entry)
-            self._matrix = None
         return entry
 
     def stats(self) -> dict[str, float | int]:

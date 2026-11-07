@@ -23,6 +23,12 @@ dev = [
     "pytest==9.1.1",
     "httpx==0.28.1",
 ]
+bench = [
+    "pandas==2.3.3",
+    "pyarrow==23.0.1",
+    "matplotlib==3.10.8",
+    "huggingface_hub==1.6.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["cacheguard*"]
