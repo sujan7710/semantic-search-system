@@ -31,6 +31,9 @@ class Settings:
     cache_ttl_seconds: float | None = 7 * 24 * 3600
     cache_max_entries: int | None = 50_000
     faiss_threads: int = 1  # per-search threads; concurrency comes from parallel requests
+    guard_enabled: bool = True  # False falls back to the plain global threshold
+    guard_dir: str = "configs/guard"  # calibrated guard settings (python -m cacheguard.bench.guard_eval)
+    verifier_model: str = "cross-encoder/quora-distilroberta-base"
     top_k: int = 5
     snippet_chars: int = 300
     n_clusters: int = 10
@@ -49,6 +52,9 @@ class Settings:
             cache_ttl_seconds=_optional_float("CACHE_TTL_SECONDS", d.cache_ttl_seconds),
             cache_max_entries=_optional_int("CACHE_MAX_ENTRIES", d.cache_max_entries),
             faiss_threads=int(_env("FAISS_THREADS", d.faiss_threads)),
+            guard_enabled=_env("GUARD", "on").strip().lower() not in {"off", "0", "false", "no"},
+            guard_dir=_env("GUARD_DIR", d.guard_dir),
+            verifier_model=_env("VERIFIER_MODEL", d.verifier_model),
             top_k=int(_env("TOP_K", d.top_k)),
             snippet_chars=int(_env("SNIPPET_CHARS", d.snippet_chars)),
             n_clusters=int(_env("N_CLUSTERS", d.n_clusters)),

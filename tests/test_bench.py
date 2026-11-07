@@ -94,6 +94,40 @@ def test_replay_scores_correct_and_wrong_hits():
     assert r.final_cache_entries == 2
 
 
+def test_judge_only_counts_labeled_pairs():
+    from cacheguard.bench.workload import CORRECT, UNJUDGED, WRONG
+
+    hn = [HardNegative("how do I cancel", "how do I not cancel", "negation")]
+    wl = build_workload(
+        ["how do I cancel", "best phone", "best laptop"],
+        ["cancel my order how", "top phone", "cheap laptop"],
+        [1, 1, 0],
+        hn,
+        seed=0,
+    )
+    i = wl.queries.index
+    assert wl.judge(i("how do I cancel"), i("cancel my order how")) == CORRECT
+    assert wl.judge(i("how do I not cancel"), i("cancel my order how")) == WRONG  # look-alike vs original's group
+    assert wl.judge(i("cancel my order how"), i("how do I not cancel")) == WRONG  # served from a cached look-alike
+    assert wl.judge(i("best laptop"), i("cheap laptop")) == WRONG  # labeled not duplicate
+    assert wl.judge(i("best phone"), i("best laptop")) == UNJUDGED  # never compared by annotators
+
+
+def test_replay_policy_counts_judged_hits_only():
+    from cacheguard.bench.workload import replay_policy
+
+    wl = Workload(
+        ["a", "a2", "b", "c"], [0, 0, 1, 2], ["natural"] * 4, [None] * 4,
+        frozenset({("b", "a"), ("a", "b")}),
+    )
+    emb = np.eye(4, dtype=np.float32)
+    always = lambda i, j, s: (True, "always", False)  # noqa: E731
+    r = replay_policy("always", wl, emb, always)
+    # a2->a correct, b->a wrong (labeled), c->a unjudged
+    assert (r.hits, r.judged_hits, r.correct_hits, r.wrong_hits) == (3, 2, 1, 1)
+    assert r.false_hit_rate == 0.5 and r.judged_share == pytest.approx(2 / 3)
+
+
 def test_cache_buffer_grows_past_initial_capacity():
     cache = SemanticCache(threshold=0.999)
     vectors = np.eye(40, dtype=np.float32)

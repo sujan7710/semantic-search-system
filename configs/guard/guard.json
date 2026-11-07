@@ -1,0 +1,14 @@
+{
+  "default": {
+    "gate": 0.5,
+    "skip_verify_above": 1.01,
+    "min_verifier_score": 0.9,
+    "use_rules": true
+  },
+  "per_cluster": {},
+  "metadata": {
+    "calibrated_for_false_hit_rate": 0.05,
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "verifier_model": "cross-encoder/quora-distilroberta-base"
+  }
+}

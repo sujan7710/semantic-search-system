@@ -11,7 +11,7 @@ def client(service):
 
 def test_health(client):
     body = client.get("/health").json()
-    assert body == {"status": "ok", "backend": "newsgroups-search", "cache_entries": 0}
+    assert body == {"status": "ok", "backend": "newsgroups-search", "cache_entries": 0, "guard": None}
 
 
 def test_first_query_misses_and_returns_ranked_sources(client):

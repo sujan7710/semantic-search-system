@@ -71,10 +71,17 @@ class _Counters:
     evictions: int = 0
     expirations: int = 0
     invalidations: int = 0
+    decisions: dict[str, int] = field(default_factory=dict)  # why lookups ended as they did
+
+    def merge(self, other: _Counters) -> None:
+        for name in ("hits", "misses", "evictions", "expirations", "invalidations"):
+            setattr(self, name, getattr(self, name) + getattr(other, name))
+        for reason, count in other.decisions.items():
+            self.decisions[reason] = self.decisions.get(reason, 0) + count
 
     def as_dict(self) -> dict:
         lookups = self.hits + self.misses
-        return {**vars(self), "hit_rate": self.hits / lookups if lookups else 0.0}
+        return {**vars(self), "decisions": dict(self.decisions), "hit_rate": self.hits / lookups if lookups else 0.0}
 
 
 @dataclass
@@ -140,31 +147,50 @@ class CacheStore:
     # ------------------------------------------------------------------ lookups
 
     def lookup(self, partition: str, embedding: np.ndarray) -> StoreLookup:
+        """Nearest entry + threshold policy in one call (no external verifier)."""
         query = self._prepare(embedding)
         with self._lock:
-            now = self._clock()
-            counters = self._counters[partition]
-            nearest = self._nearest_valid(partition, query, now)
+            nearest = self._nearest_valid(partition, query, self._clock())
             if nearest is None:
-                counters.misses += 1
+                self.record(partition, None, hit=False)
                 return StoreLookup(False, None, None, None)
-
             entry, similarity = nearest
             threshold = self.policy.threshold(partition, entry.cluster)
-            if similarity >= threshold:
-                counters.hits += 1
-                entry.hit_count += 1
-                entry.last_hit_at = now
-                self._lru.move_to_end(entry.entry_id)
-                self._db.execute(
-                    "UPDATE entries SET hit_count = ?, last_hit_at = ? WHERE entry_id = ?",
-                    (entry.hit_count, now, entry.entry_id),
-                )
-                self._db.commit()
-                return StoreLookup(True, entry, similarity, threshold, entry.query)
+            hit = similarity >= threshold
+            self.record(partition, entry if hit else None, hit=hit, reason="threshold")
+            return StoreLookup(hit, entry if hit else None, similarity, threshold, entry.query)
 
-            counters.misses += 1
-            return StoreLookup(False, None, similarity, threshold, entry.query)
+    def nearest(self, partition: str, embedding: np.ndarray) -> tuple[StoredEntry, float] | None:
+        """Nearest unexpired entry in the partition, without recording anything.
+
+        Used with ``record`` when the hit decision is made outside the store
+        (the guard), so a slow verifier never runs while holding the store lock.
+        """
+        query = self._prepare(embedding)
+        with self._lock:
+            return self._nearest_valid(partition, query, self._clock())
+
+    def record(self, partition: str, entry: StoredEntry | None, hit: bool, reason: str | None = None) -> None:
+        """Count a lookup outcome; on a hit, refresh the entry's recency and hit count."""
+        with self._lock:
+            counters = self._counters[partition]
+            if reason is not None:
+                counters.decisions[reason] = counters.decisions.get(reason, 0) + 1
+            if not hit:
+                counters.misses += 1
+                return
+            counters.hits += 1
+            if entry is None or entry.entry_id not in self._entries:
+                return  # evicted or invalidated while the decision was being made
+            now = self._clock()
+            entry.hit_count += 1
+            entry.last_hit_at = now
+            self._lru.move_to_end(entry.entry_id)
+            self._db.execute(
+                "UPDATE entries SET hit_count = ?, last_hit_at = ? WHERE entry_id = ?",
+                (entry.hit_count, now, entry.entry_id),
+            )
+            self._db.commit()
 
     def _nearest_valid(self, partition: str, query: np.ndarray, now: float) -> tuple[StoredEntry, float] | None:
         part = self._partitions.get(partition)
@@ -274,8 +300,7 @@ class CacheStore:
             partitions = {}
             for name in sorted(set(self._partitions) | set(self._counters)):
                 c = self._counters[name]
-                for key in vars(totals):
-                    setattr(totals, key, getattr(totals, key) + getattr(c, key))
+                totals.merge(c)
                 part = self._partitions.get(name)
                 partitions[name] = {"entries": len(part.ids) if part else 0, **c.as_dict()}
             policy = getattr(self.policy, "describe", lambda: {"type": type(self.policy).__name__})()

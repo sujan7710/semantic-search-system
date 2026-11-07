@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import random
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
@@ -29,14 +29,45 @@ from cacheguard.bench.hard_negatives import HardNegative
 from cacheguard.cache import SemanticCache
 
 
+CORRECT, WRONG, UNJUDGED = 1, 0, -1
+
+
 @dataclass(frozen=True)
 class Workload:
     queries: list[str]
     groups: list[int]
     kinds: list[str]  # "natural" or the hard-negative kind
+    # For a hard negative, the meaning group of the question it was edited from.
+    origins: list[int | None] = field(default_factory=list)
+    # Pairs annotators explicitly labeled "not duplicate" (both orders).
+    not_duplicate: frozenset[tuple[str, str]] = frozenset()
 
     def __len__(self) -> int:
         return len(self.queries)
+
+    def judge(self, i: int, j: int) -> int:
+        """Is answering query i with cached query j's answer correct?
+
+        Only pairs the labels actually cover are judged:
+        * same duplicate group                       -> CORRECT
+        * a hard negative vs its original's group    -> WRONG
+        * explicitly labeled "not duplicate"         -> WRONG
+        * anything else                              -> UNJUDGED
+
+        QQP annotators compared specific pairs only. Two questions from
+        different pairs that were never compared are often real paraphrases,
+        so counting them as wrong (as the Phase 1 replay did) overstates errors.
+        """
+        if self.groups[i] == self.groups[j]:
+            return CORRECT
+        origins = self.origins or [None] * len(self.queries)
+        if origins[i] is not None and origins[i] == self.groups[j]:
+            return WRONG
+        if origins[j] is not None and origins[j] == self.groups[i]:
+            return WRONG
+        if (self.queries[i], self.queries[j]) in self.not_duplicate:
+            return WRONG
+        return UNJUDGED
 
 
 def build_workload(
@@ -61,11 +92,12 @@ def build_workload(
             negatives_by_original.setdefault(hn.original, []).append(hn)
 
     next_group = max(groups.values(), default=-1) + 1
-    queries, query_groups, kinds = [], [], []
+    queries, query_groups, kinds, origins = [], [], [], []
     for q in questions:
         queries.append(q)
         query_groups.append(groups[q])
         kinds.append("natural")
+        origins.append(None)
     # Insert each hard negative at a random point after its original.
     for hn in (h for hs in negatives_by_original.values() for h in hs):
         after = queries.index(hn.original)
@@ -73,8 +105,12 @@ def build_workload(
         queries.insert(pos, hn.perturbed)
         query_groups.insert(pos, next_group)
         kinds.insert(pos, hn.kind)
+        origins.insert(pos, groups[hn.original])
         next_group += 1
-    return Workload(queries, query_groups, kinds)
+    not_duplicate = frozenset(
+        pair for a, b, label in zip(text_a, text_b, labels) if label == 0 for pair in ((a, b), (b, a))
+    )
+    return Workload(queries, query_groups, kinds, origins, not_duplicate)
 
 
 @dataclass(frozen=True)
@@ -97,6 +133,112 @@ class ReplayResult:
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+def nearest_previous(embeddings: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """For each query i, the most similar earlier query j < i (j = -1 for the first).
+
+    This is the candidate a cache holding every earlier question would offer.
+    The real cache holds only the questions that missed, so its candidate can
+    differ; this is used to calibrate and to pre-compute verifier scores.
+    """
+    import faiss
+
+    index = faiss.IndexFlatIP(embeddings.shape[1])
+    sims = np.full(len(embeddings), -1.0, dtype=np.float32)
+    idx = np.full(len(embeddings), -1, dtype=np.int64)
+    for i, v in enumerate(np.ascontiguousarray(embeddings, dtype=np.float32)):
+        if i:
+            s, j = index.search(v.reshape(1, -1), 1)
+            sims[i], idx[i] = s[0, 0], j[0, 0]
+        index.add(v.reshape(1, -1))
+    return sims, idx
+
+
+@dataclass(frozen=True)
+class PolicyReplayResult:
+    name: str
+    queries: int
+    hits: int
+    judged_hits: int  # hits whose correctness the labels determine
+    correct_hits: int
+    wrong_hits: int
+    hit_rate: float
+    judged_share: float  # judged_hits / hits
+    false_hit_rate: float  # wrong / judged hits
+    natural_false_hit_rate: float  # same, natural queries only
+    hard_negative_queries: int
+    hard_negative_wrong_hits: int
+    verifier_calls: int
+    verifier_call_rate: float
+    reasons: dict
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def replay_policy(name: str, workload: Workload, embeddings: np.ndarray, decide) -> PolicyReplayResult:
+    """Replay with an arbitrary decision function.
+
+    ``decide(i, candidate_index, similarity)`` gets the incoming query index,
+    the stream index of the nearest *cached* query, and their similarity, and
+    returns ``(hit, reason, used_verifier)``. Queries that are not hits are
+    added to the cache, as in the real service.
+    """
+    import faiss
+
+    index = faiss.IndexFlatIP(embeddings.shape[1])
+    cached_stream_ids: list[int] = []
+    hits = judged = correct = wrong = hn_queries = hn_wrong = verifier_calls = 0
+    natural_judged = natural_wrong = 0
+    reasons: dict[str, int] = {}
+    vectors = np.ascontiguousarray(embeddings, dtype=np.float32)
+
+    for i, kind in enumerate(workload.kinds):
+        if kind != "natural":
+            hn_queries += 1
+        hit = False
+        if cached_stream_ids:
+            s, j = index.search(vectors[i].reshape(1, -1), 1)
+            candidate = cached_stream_ids[int(j[0, 0])]
+            hit, reason, used_verifier = decide(i, candidate, float(s[0, 0]))
+            reasons[reason] = reasons.get(reason, 0) + 1
+            verifier_calls += int(used_verifier)
+            if hit:
+                hits += 1
+                verdict = workload.judge(i, candidate)
+                if verdict != UNJUDGED:
+                    judged += 1
+                    natural = kind == "natural" and workload.kinds[candidate] == "natural"
+                    natural_judged += natural
+                    if verdict == CORRECT:
+                        correct += 1
+                    else:
+                        wrong += 1
+                        natural_wrong += natural
+                        hn_wrong += kind != "natural"
+        if not hit:
+            index.add(vectors[i].reshape(1, -1))
+            cached_stream_ids.append(i)
+
+    n = len(workload)
+    return PolicyReplayResult(
+        name=name,
+        queries=n,
+        hits=hits,
+        judged_hits=judged,
+        correct_hits=correct,
+        wrong_hits=wrong,
+        hit_rate=hits / n,
+        judged_share=judged / hits if hits else 0.0,
+        false_hit_rate=wrong / judged if judged else 0.0,
+        natural_false_hit_rate=natural_wrong / natural_judged if natural_judged else 0.0,
+        hard_negative_queries=hn_queries,
+        hard_negative_wrong_hits=hn_wrong,
+        verifier_calls=verifier_calls,
+        verifier_call_rate=verifier_calls / n,
+        reasons=reasons,
+    )
 
 
 def replay(workload: Workload, embeddings: np.ndarray, threshold: float) -> ReplayResult:

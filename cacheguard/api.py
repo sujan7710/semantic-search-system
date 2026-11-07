@@ -34,6 +34,13 @@ class SourceOut(BaseModel):
     snippet: str
 
 
+class DecisionOut(BaseModel):
+    stage: str = Field(description="Where the decision was made: none, gate, rules, similarity, verifier or threshold.")
+    reason: str = Field(description="e.g. verified, below_gate, negation, number, name, verifier_rejected.")
+    verifier_score: float | None = Field(description="Cross-encoder probability that both ask the same thing, if it ran.")
+    decision_ms: float
+
+
 class QueryResponse(BaseModel):
     query: str
     namespace: str
@@ -43,8 +50,9 @@ class QueryResponse(BaseModel):
     cache_similarity: float | None = Field(
         description="Cosine similarity to the nearest cached query in this namespace (null when none)."
     )
-    threshold: float | None = Field(description="Similarity required for that entry to count as a hit.")
+    threshold: float | None = Field(description="Similarity gate applied to that entry.")
     nearest_query: str | None = Field(description="Nearest cached query, also shown on a miss.")
+    decision: DecisionOut
     dominant_cluster: int | None
     answer: str
     sources: list[SourceOut]
@@ -68,7 +76,12 @@ def create_app(service: CacheGuardService) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok", "backend": service.backend.name, "cache_entries": len(service.store)}
+        return {
+            "status": "ok",
+            "backend": service.backend.name,
+            "cache_entries": len(service.store),
+            "guard": service.guard.describe() if service.guard else None,
+        }
 
     @app.post("/query", response_model=QueryResponse)
     def query(request: QueryRequest) -> QueryResponse:
@@ -82,6 +95,12 @@ def create_app(service: CacheGuardService) -> FastAPI:
             cache_similarity=r.cache_similarity,
             threshold=r.threshold,
             nearest_query=r.nearest_query,
+            decision=DecisionOut(
+                stage=r.decision.stage,
+                reason=r.decision.reason,
+                verifier_score=r.decision.verifier_score,
+                decision_ms=round(r.decision_ms, 2),
+            ),
             dominant_cluster=r.dominant_cluster,
             answer=r.response.answer,
             sources=[SourceOut(**vars(s)) for s in r.response.sources],

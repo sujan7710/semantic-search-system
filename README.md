@@ -4,7 +4,21 @@
 
 CacheGuard sits in front of an answer backend (today a document search, later an LLM via Groq). When a new question means the same thing as one it has already answered, it returns the saved answer instantly instead of calling the backend again. The goal of the project is to do that *without* serving wrong answers for questions that look alike but are different ("cancel my order" vs "don't cancel my order"), and to measure exactly how often that happens.
 
-> **Status: Phase 2 (cache core).** The project grew out of a 20 Newsgroups semantic search system (preserved at the git tag `v0-newsgroups-search`). Phase 0 restructured it and fixed measured bugs; Phase 1 measured how often a fixed-threshold cache serves wrong answers; Phase 2 made the cache a real store: partitioned, persistent, expiring and invalidatable. See [Roadmap](#roadmap).
+> **Status: Phase 3 (the guard).** The project grew out of a 20 Newsgroups semantic search system (preserved at the git tag `v0-newsgroups-search`). Phase 0 restructured it and fixed measured bugs; Phase 1 measured how often a fixed-threshold cache serves wrong answers; Phase 2 made the cache a real store; Phase 3 added the guard that decides when reuse is safe. See [Roadmap](#roadmap).
+
+## Result
+
+Replaying the same 26,858-question test stream (Quora questions plus 2,000 generated look-alikes) through both caches:
+
+| | Correct answers from cache | **Wrong answers from cache** | Look-alikes served the wrong answer |
+|---|---|---|---|
+| Plain semantic cache (threshold 0.85, the original project) | 4,377 | **2,061** | 1,303 of 1,998 |
+| **CacheGuard** (calibrated for a 5% error budget) | 4,231 | **241** (−88%) | 74 of 1,998 |
+| CacheGuard (calibrated for 10%) | 5,123 (+17%) | 634 (−69%) | 326 of 1,998 |
+
+CacheGuard keeps 97% of the useful reuse while serving 88% fewer wrong answers. The 5% budget was chosen on separate calibration data and held on test (5.4% measured). The cost: the cross-encoder verifier runs on ~60% of lookups at ~31 ms each on CPU. [Full Phase 3 report](benchmarks/results/phase3_guard/README.md).
+
+![Guard vs threshold](benchmarks/results/phase3_guard/frontier.png)
 
 ## The problem, measured
 
@@ -12,19 +26,15 @@ A plain semantic cache reuses an answer when two questions are "similar enough" 
 
 | At threshold 0.85 | Result |
 |---|---|
-| Cache answers that were for a different question (replaying 26,858 queries) | **43.5%** (30.9% on natural queries only) |
+| Judged cache answers that were for a different question (replaying 26,858 queries) | **32.0%** (14.7% on natural queries only) |
 | "How do I *not* cancel…" treated as "How do I cancel…" | **99.4%** of negated questions |
 | Swapped number ("5 hours" → "10 hours") reused | **90.8%** |
 | Swapped antonym ("best" → "worst") reused | **86.2%** |
 | PAWS word-order pairs (different meaning) | AUC **0.63**: barely better than chance |
 
-And no single threshold fixes it. Calibrated on held-out data, a 1% wrong-answer budget forces the threshold to 0.998, where the cache reuses **0.7%** of paraphrases: it is safe only because it almost never fires.
+No single threshold fixes it: on the test stream, every threshold from 0.75 to 0.99 serves 32–39% wrong answers among judged hits, because negations and swapped numbers sit at similarity 0.95–0.98, above paraphrases.
 
-![Trade-off](benchmarks/results/phase1_baseline/tradeoff.png)
-
-This is what the later phases address: per-cluster thresholds and a verifier for borderline matches (Phase 3). Phase 1's numbers are the baseline those changes must beat.
-
-**Caveat:** QQP "not duplicate" labels are incomplete. Some counted wrong hits are true paraphrases (even at similarity ≥ 0.996, 11.5% of natural hits land in a different labeled group, which is mostly label noise). False-hit rates are therefore upper bounds; the hard-negative numbers do not have this problem.
+**How errors are counted (a correction).** QQP annotators labeled specific pairs, not all pairs. Phase 1 first counted every hit between questions from different labeled pairs as wrong (43.5% at 0.85). A manual check in Phase 3 showed 64% of such high-similarity "errors" had never been compared by annotators, and most were real paraphrases ("How do I increase my level of confidence?" / "How can I improve my confidence?"). All Phase 3 numbers therefore judge only pairs the labels cover: same labeled group = correct; labeled "not duplicate" or a generated look-alike = wrong; anything else = unjudged and excluded from error rates (70–90% of hits are judged).
 
 ## How a request flows
 
@@ -34,11 +44,15 @@ question + namespace
    ├─► partition key (namespace + backend; exact match, never shared)
    ├─► embed (MiniLM)
    ├─► FAISS search in that partition only, skipping expired entries
-   ├─► similarity ≥ threshold policy?
-   │      yes ─► return cached answer (hit count + recency updated)
-   │      no  ─► ask backend ─► store answer, tagged by namespace and source documents
-   │                              (SQLite write-through, LRU eviction past the cap)
-   └─► response explains itself: similarity, threshold, nearest cached question
+   ├─► guard (outside the store lock, so a slow check never blocks other requests):
+   │      similarity < gate                    → miss
+   │      negation / number / name swapped     → reject   (rules, ~0.1 ms)
+   │      cross-encoder says same question     → hit      (~30 ms, borderline only)
+   │      otherwise                            → reject
+   │   hit ─► return cached answer (hit count + recency updated)
+   │   no  ─► ask backend ─► store answer, tagged by namespace and source documents
+   │                          (SQLite write-through, LRU eviction past the cap)
+   └─► response explains itself: similarity, nearest cached question, which stage decided and why
 ```
 
 ## Quick start
@@ -77,6 +91,14 @@ pip install -e ".[bench]"
 python -m cacheguard.bench.run
 ```
 
+Re-calibrate the guard and reproduce Phase 3 (downloads the ~330 MB cross-encoder; ~30 minutes on CPU the first time, cross-encoder scores are then cached). It writes the report and the shipped settings in `configs/guard/`:
+
+```bash
+python -m cacheguard.bench.guard_eval
+```
+
+The API loads the guard from `configs/guard/` (first start downloads the cross-encoder). Set `CACHEGUARD_GUARD=off` to fall back to the plain threshold.
+
 Run the tests (no model download needed; they use a small fake embedder):
 
 ```bash
@@ -92,28 +114,38 @@ pytest
 | `DELETE` | `/cache` | Clear the cache |
 | `DELETE` | `/cache/entries/{id}` | Remove one cached answer |
 | `POST` | `/cache/invalidate` | Remove all answers for `{"tag": "source:1234"}` or `{"namespace": "team-a"}` |
-| `GET` | `/health` | Liveness, backend name, entry count |
+| `GET` | `/health` | Liveness, backend name, entry count, active guard settings |
 
-`POST /query` with `{"query": "why was the shuttle launch delayed"}` (after `"space shuttle launch delays"` was asked) returns:
+`POST /query` with `{"query": "Is five hours of sleep sufficient?"}` (after `"Is 5 hours of sleep enough?"` was asked) returns:
 
 ```json
 {
-  "query": "why was the shuttle launch delayed",
+  "query": "Is five hours of sleep sufficient?",
   "namespace": "default",
   "cache_hit": true,
-  "entry_id": 1,
-  "matched_query": "space shuttle launch delays",
-  "cache_similarity": 0.871,
-  "threshold": 0.85,
-  "nearest_query": "space shuttle launch delays",
-  "dominant_cluster": 0,
-  "answer": "…best matching post…",
-  "sources": [{"doc_id": 1234, "newsgroup": "sci.space", "score": 0.545, "snippet": "…"}],
-  "latency_ms": 22.5
+  "entry_id": 7,
+  "matched_query": "Is 5 hours of sleep enough?",
+  "cache_similarity": 0.967,
+  "threshold": 0.5,
+  "nearest_query": "Is 5 hours of sleep enough?",
+  "decision": {"stage": "verifier", "reason": "verified", "verifier_score": 0.978, "decision_ms": 25.2},
+  "dominant_cluster": 2,
+  "answer": "…",
+  "sources": [...],
+  "latency_ms": 41.0
 }
 ```
 
-`cache_similarity` and `nearest_query` describe the nearest cached question in the same namespace, also on a miss, so a near-miss can be explained. `sources[].score` is the cosine similarity between the query and each document.
+From the live API, other questions asked against those cached:
+
+| Question | Nearest cached question | Similarity | Decision |
+|---|---|---|---|
+| How do I not cancel my order? | How do I cancel my order? | 0.98 | rejected: `rules / negation` (0.04 ms) |
+| Is 8 hours of sleep enough? | Is 5 hours of sleep enough? | 0.87 | rejected: `rules / number` |
+| What is the worst way to learn Python? | What is the best way to learn Python? | 0.87 | rejected: `verifier`, score 0.003 |
+| How can I cancel an order I placed? | How do I cancel my order? | 0.93 | rejected: `verifier`, score 0.82 < 0.9 (a missed hit: the 5% budget is strict) |
+
+`cache_similarity` and `nearest_query` describe the nearest cached question in the same namespace, also on a miss, so every decision can be explained. `/cache/stats` counts decisions by reason.
 
 ### Configuration
 
@@ -121,7 +153,10 @@ Environment variables (defaults in [config.py](cacheguard/config.py)):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CACHEGUARD_CACHE_THRESHOLD` | `0.85` | Global similarity threshold (Phase 3 replaces this) |
+| `CACHEGUARD_GUARD` | `on` | `off` uses the plain threshold below instead of the guard |
+| `CACHEGUARD_GUARD_DIR` | `configs/guard` | Calibrated guard settings |
+| `CACHEGUARD_VERIFIER_MODEL` | `cross-encoder/quora-distilroberta-base` | Used if the guard config does not name one |
+| `CACHEGUARD_CACHE_THRESHOLD` | `0.85` | Plain threshold, used only when the guard is off |
 | `CACHEGUARD_CACHE_DB_PATH` | `artifacts/cache.sqlite3` | SQLite file; `:memory:` disables persistence |
 | `CACHEGUARD_CACHE_TTL_SECONDS` | `604800` (7 days) | Default entry lifetime; `none` disables expiry |
 | `CACHEGUARD_CACHE_MAX_ENTRIES` | `50000` | LRU eviction cap; `none` disables |
@@ -134,8 +169,10 @@ cacheguard/
   config.py          settings (override with CACHEGUARD_* env vars)
   embeddings.py      sentence-transformers wrapper, unit-normalized output
   vector_index.py    FAISS exact inner-product (cosine) index
+  guard.py           hit decision: gate, rules, verifier; per-cluster settings; save/load
+  verify.py          rule checks (negation, numbers, names) and the cross-encoder verifier
   store.py           cache store: partitioned FAISS indexes, SQLite, TTL, LRU, tag invalidation
-  policy.py          threshold policies (global today; calibrated in Phase 3)
+  policy.py          plain threshold policy (used when the guard is off)
   partitions.py      exact-match partition keys (namespace, backend, model settings)
   cache.py           original list cache, kept as the benchmark baseline
   clustering.py      Gaussian mixture soft clustering, saved as .npz (no pickle)
@@ -145,7 +182,8 @@ cacheguard/
   service.py         the request path: embed, look up, answer, store
   api.py             FastAPI app
   build.py, cli.py   command-line entry points
-  bench/             benchmark: datasets, hard negatives, pair metrics, workload replay
+  bench/             benchmarks: datasets, hard negatives, replay, scale, guard calibration
+configs/guard/       shipped guard settings (output of bench.guard_eval)
 benchmarks/results/  committed benchmark reports
 tests/               pytest suite
 ```
@@ -166,7 +204,7 @@ These came from measuring the original system rather than reading it:
 
 Effect of the leak fix: on the rebuilt index, the share of a document's 10 nearest neighbours from the same newsgroup fell from **0.77 to 0.67**. About 10 points of the original "quality" came from the leaked headers.
 
-**Known issue, deferred to Phase 3:** the Gaussian mixture is "soft" in name only. With full covariance in 384 dimensions, over 99.9% of documents get more than 0.99 probability for a single cluster. It will be reworked when clusters start driving per-cluster cache thresholds.
+**Known issue:** the Gaussian mixture is "soft" in name only. With full covariance in 384 dimensions, over 99.9% of documents get more than 0.99 probability for a single cluster. Phase 3 did not reuse it: per-cluster guard settings use k-means on *question* embeddings instead, and did not help anyway (see below). It now only labels newsgroup topics.
 
 ## Phase 2: cache core
 
@@ -196,6 +234,23 @@ What the numbers decided:
 - **HNSW was measured and rejected for now.** It was 0.3–0.6 ms at every size, but on these vectors it returned the true nearest neighbour only 66% (10k) to 7% (200k) of the time, takes minutes to build, and cannot delete entries. For a cache, a missed neighbour is a missed hit (wasted money), not a wrong answer, so approximate search is a cost trade-off to revisit only if a partition outgrows exact search.
 - **FAISS runs single-threaded per search.** With 12 OpenMP threads, each single-query search paid ~0.5 ms of thread start-up, 10x the search itself at 2k entries. Parallelism comes from concurrent requests instead.
 
+## Phase 3: the guard
+
+The guard ([guard.py](cacheguard/guard.py)) checks a candidate match in stages, cheapest first:
+
+1. **Gate.** Below a similarity floor, it is a miss without further work.
+2. **Rules** ([verify.py](cacheguard/verify.py), ~0.1 ms). Reject if negation differs, or if each side has a number or capitalized name the other lacks (a swap). The first version rejected on *any* difference and threw away 37% of real paraphrases ("best laptop?" vs "best laptop under 40k?"); requiring a swap cut that to 10%.
+3. **Cross-encoder** (`cross-encoder/quora-distilroberta-base`, ~31 ms on CPU). Reads both questions together instead of comparing two separate embeddings. On QQP calibration pairs: AUC **0.961** vs 0.867 for embedding similarity.
+
+The gate, verifier cut-off and whether rules run are not hand-picked. A grid of 348 settings is scored on a calibration stream, and for each error budget the setting with the most hits within budget is shipped ([guard_eval.py](cacheguard/bench/guard_eval.py)). Calibration and test use disjoint question groups.
+
+What the experiments showed:
+
+- **The cross-encoder does most of the work.** Without rules it reaches 23.2% hits at 6.6% judged errors (5% budget). Rules mainly cut look-alikes served wrong (178 → 74), which is partly circular because the look-alike generator edits the same things the rules check. At 10% and 15% budgets calibration switched rules off.
+- **Per-cluster settings did not help.** Settings tuned per question cluster (k-means, 8 clusters) were within ±1.5 points of the global setting on test, better at one budget and worse at another. That is calibration noise, not signal, so the shipped guard uses one global setting.
+- **Rules alone are not enough.** Rules plus the best threshold, without the cross-encoder, reached only 10.3% hits at a 15% budget.
+- **Open limitations.** The verifier is trained on QQP (train split; tests use validation), so these numbers are in-domain. On PAWS word-order swaps it is worse than embeddings (AUC 0.57 vs 0.63). It runs on ~60% of lookups, adding ~31 ms each; a smaller or quantized verifier, or a calibrated `skip_verify_above`, would cut that.
+
 ## Roadmap
 
 | Phase | Goal |
@@ -203,11 +258,11 @@ What the numbers decided:
 | 0 | Foundation: restructure, fix measured bugs, tests *(done)* |
 | 1 | Benchmark harness: paraphrase datasets (QQP, PAWS) and hard negatives; measure the baseline cache's hit rate vs wrong-hit rate *(done)* |
 | 2 | Cache core: FAISS-backed cache, persistence, expiry and eviction, partitioning by model/tenant *(done)* |
-| 3 | Correctness: calibrated and per-cluster thresholds, verifier for borderline matches |
+| 3 | Correctness: calibrated guard with rules and a cross-encoder verifier; per-cluster settings tested *(done)* |
 | 4 | Gateway: Groq LLM backend, OpenAI-compatible API, demo chat page |
 | 5 | Operations: metrics, dashboard, load tests, Docker, deployment |
 | 6 | Write-up: results, design decisions, what didn't work |
 
 ## Tech
 
-Python, FastAPI, sentence-transformers (`all-MiniLM-L6-v2`), FAISS, scikit-learn, NumPy, pytest.
+Python, FastAPI, sentence-transformers (`all-MiniLM-L6-v2` embeddings, `quora-distilroberta-base` cross-encoder), FAISS, SQLite, scikit-learn, NumPy, pytest.
