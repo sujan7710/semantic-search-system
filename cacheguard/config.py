@@ -48,7 +48,8 @@ def _flag(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     # --- backend: what answers on a cache miss -------------------------------
-    backend: str = "auto"  # auto (groq if GROQ_API_KEY is set, else newsgroups) | groq | newsgroups
+    backend: str = "auto"  # auto (groq if GROQ_API_KEY is set, else newsgroups) | groq | newsgroups | mock
+    mock_delay_ms: float = 600.0  # simulated LLM latency for the mock backend (load tests)
     groq_api_key: str = ""  # read from GROQ_API_KEY (no prefix), never logged
     groq_model: str = "openai/gpt-oss-20b"
     groq_base_url: str = "https://api.groq.com/openai/v1"
@@ -76,9 +77,13 @@ class Settings:
     cache_ttl_seconds: float | None = 7 * 24 * 3600
     cache_max_entries: int | None = 50_000
     faiss_threads: int = 1  # per-search threads; concurrency comes from parallel requests
+    # Per-inference threads for the two models. 1 measured best under concurrent load
+    # (+42% throughput at 32 users); "none" restores PyTorch's default of all cores.
+    torch_threads: int | None = 1
     guard_enabled: bool = True  # False falls back to the plain global threshold
     guard_dir: str = "configs/guard"  # calibrated guard settings (python -m cacheguard.bench.guard_eval)
     verifier_model: str = "cross-encoder/quora-distilroberta-base"
+    verifier_memo_size: int = 50_000  # remembered (question, candidate) scores; 0 disables
 
     # --- public demo protection ------------------------------------------------
     rate_limit_per_minute: int | None = 30  # per client IP, on /query, /explain and /v1/chat/completions
@@ -94,6 +99,7 @@ class Settings:
         d = cls()
         return cls(
             backend=_env("BACKEND", d.backend).strip().lower(),
+            mock_delay_ms=float(_env("MOCK_DELAY_MS", d.mock_delay_ms)),
             groq_api_key=os.environ.get("GROQ_API_KEY", "").strip(),
             groq_model=_env("GROQ_MODEL", d.groq_model),
             groq_base_url=_env("GROQ_BASE_URL", d.groq_base_url),
@@ -116,9 +122,11 @@ class Settings:
             cache_ttl_seconds=_optional_float("CACHE_TTL_SECONDS", d.cache_ttl_seconds),
             cache_max_entries=_optional_int("CACHE_MAX_ENTRIES", d.cache_max_entries),
             faiss_threads=int(_env("FAISS_THREADS", d.faiss_threads)),
+            torch_threads=_optional_int("TORCH_THREADS", d.torch_threads),
             guard_enabled=_flag("GUARD", d.guard_enabled),
             guard_dir=_env("GUARD_DIR", d.guard_dir),
             verifier_model=_env("VERIFIER_MODEL", d.verifier_model),
+            verifier_memo_size=int(_env("VERIFIER_MEMO_SIZE", d.verifier_memo_size)),
             rate_limit_per_minute=_optional_int("RATE_LIMIT_PER_MINUTE", d.rate_limit_per_minute),
             daily_backend_calls=_optional_int("DAILY_BACKEND_CALLS", d.daily_backend_calls),
             trust_proxy=_flag("TRUST_PROXY", d.trust_proxy),
@@ -129,6 +137,6 @@ class Settings:
     def resolved_backend(self) -> str:
         if self.backend == "auto":
             return "groq" if self.groq_api_key else "newsgroups"
-        if self.backend not in {"groq", "newsgroups"}:
-            raise ValueError(f"unknown backend {self.backend!r}; use auto, groq or newsgroups")
+        if self.backend not in {"groq", "newsgroups", "mock"}:
+            raise ValueError(f"unknown backend {self.backend!r}; use auto, groq, newsgroups or mock")
         return self.backend

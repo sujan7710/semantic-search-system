@@ -117,6 +117,8 @@ class CrossEncoderVerifier:
 
     def score(self, pairs: Sequence[tuple[str, str]]) -> np.ndarray:
         pairs = [(a, b) for a, b in pairs]
+        if self._memo_size <= 0:  # memo disabled (e.g. load tests that replay the same pairs)
+            return np.asarray(self._model.predict(pairs, batch_size=32, show_progress_bar=False), dtype=float)
         with self._lock:
             missing = list(dict.fromkeys(p for p in pairs if p not in self._memo))
         if missing:

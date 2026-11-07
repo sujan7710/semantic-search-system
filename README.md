@@ -190,6 +190,9 @@ Environment variables (defaults in [config.py](cacheguard/config.py)):
 | `CACHEGUARD_CACHE_TTL_SECONDS` | `604800` (7 days) | Default entry lifetime; `none` disables expiry |
 | `CACHEGUARD_CACHE_MAX_ENTRIES` | `50000` | LRU eviction cap; `none` disables |
 | `CACHEGUARD_FAISS_THREADS` | `1` | Threads per FAISS search (see scale results) |
+| `CACHEGUARD_TORCH_THREADS` | `1` | Threads per model inference (see load test); `none` for PyTorch's default |
+| `CACHEGUARD_VERIFIER_MEMO_SIZE` | `50000` | Remembered verifier scores; `0` disables (load tests) |
+| `CACHEGUARD_BACKEND=mock` + `CACHEGUARD_MOCK_DELAY_MS` | `600` | Fake LLM for load tests: no API cost |
 
 ## Project layout
 
@@ -305,6 +308,38 @@ What the experiments showed:
 | Is five hours of sleep sufficient for adults? | **cache hit** | verifier 0.988; "five" = "5" |
 | `/v1/chat/completions`: "What is the capital of Australia?" then "Which city is Australia's capital?" | AI call, then **cache hit** | second reply: 0 tokens used |
 
+## Phase 5: operations
+
+- **Metrics** (`GET /metrics`, Prometheus text format, [metrics.py](cacheguard/metrics.py), no client library):
+  - lookups by outcome, deciding stage and reason;
+  - latency histograms for whole requests, decisions (including the verifier) and AI calls;
+  - backend errors, and requests refused by the rate limit or the daily budget;
+  - gauges for cached entries, tokens and dollars saved, and budget left.
+- **Request logs.** One JSON line per question: outcome, stage, reason, similarity, verifier score and latencies. The question text is never logged, only a 12-character hash.
+- **Startup warm-up.** Both models run once at startup, because a cold verifier call measured 400 ms against ~30 ms warm.
+- **Docker image** ([Dockerfile](Dockerfile)):
+  - CPU-only PyTorch;
+  - dependencies installed in their own layer, so code changes rebuild fast;
+  - both models baked in and the Hub switched to offline mode at runtime;
+  - runs as a non-root user, with a health check;
+  - cache stored on `/data`, and the port taken from `$PORT`.
+- **CI** ([ci.yml](.github/workflows/ci.yml)): runs the tests on CPU-only PyTorch (no model downloads, no API key), then builds the image, starts it with the mock backend, and checks the demo page, a query and `/metrics`.
+- **Deployment guide:** [docs/DEPLOY.md](docs/DEPLOY.md) (memory needs, environment, hosting options).
+
+**Load test** ([report](benchmarks/results/phase5_load/README.md)). The test used real Quora paraphrase groups and a mock LLM with 600 ms latency, so it costs nothing and isn't limited by Groq's rate limits. The verifier memo was off.
+
+| Concurrent users | Throughput | Cache-hit p50 | Verifier p50 |
+|---|---|---|---|
+| 1 | 2.1 req/s | 75 ms | 53 ms |
+| 16 | 29.2 req/s | 120 ms | 81 ms |
+| 32 | 37.7 req/s | 503 ms | 231 ms |
+
+Findings:
+
+- **The bottleneck is CPU inference.** With PyTorch's default of all 12 threads per call, throughput flattened at ~26 req/s, and at 32 users a cache *hit* took 869 ms, longer than the AI call it replaces. One thread per inference (now the default) gave +42% throughput and halved hit latency, because requests already run in parallel. This is the same lesson as FAISS in Phase 2.
+- **Cache stampede.** When paraphrases arrive while the first copy is still waiting on the AI, they all miss: AI calls rose from 273 to 288 between 1 and 32 users. Request coalescing would fix this; it is not implemented.
+- **What's next:** at 32 users the server is still CPU-bound. The next steps would be micro-batching verifier calls across requests, or moving the models to an inference service.
+
 ## Roadmap
 
 | Phase | Goal |
@@ -314,7 +349,7 @@ What the experiments showed:
 | 2 | Cache core: FAISS-backed cache, persistence, expiry and eviction, partitioning by model/tenant *(done)* |
 | 3 | Correctness: calibrated guard with rules and a cross-encoder verifier; per-cluster settings tested *(done)* |
 | 4 | Gateway: Groq LLM backend, OpenAI-compatible API, demo chat page, demo protection *(done)* |
-| 5 | Operations: metrics, dashboard, load tests, Docker, deployment |
+| 5 | Operations: metrics, logs, load test, Docker, CI, deployment guide *(done; public deployment pending a host choice)* |
 | 6 | Write-up: results, design decisions, what didn't work |
 
 ## Tech

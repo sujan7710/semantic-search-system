@@ -272,6 +272,11 @@ def build_backend(settings: Settings):
             price_output_per_m=settings.price_output_per_m,
         )
         return backend, None
+    if kind == "mock":
+        from cacheguard.backends.mock import MockLLMBackend
+
+        return MockLLMBackend(settings.mock_delay_ms, price_input_per_m=settings.price_input_per_m,
+                              price_output_per_m=settings.price_output_per_m), None
 
     from cacheguard.artifacts import load_artifacts
     from cacheguard.backends.newsgroups import NewsgroupsSearchBackend
@@ -297,6 +302,10 @@ def build_default_service(settings: Settings) -> CacheGuardService:
     from cacheguard.policy import GlobalThreshold
 
     faiss.omp_set_num_threads(settings.faiss_threads)
+    if settings.torch_threads:
+        import torch
+
+        torch.set_num_threads(settings.torch_threads)
     backend, clusterer = build_backend(settings)
     embedder = SentenceTransformerEmbedder(settings.embedding_model)
     store = CacheStore(
@@ -312,6 +321,7 @@ def build_default_service(settings: Settings) -> CacheGuardService:
         from cacheguard.verify import CrossEncoderVerifier
 
         guard = Guard.load(settings.guard_dir)
-        guard.verifier = CrossEncoderVerifier(guard.metadata.get("verifier_model", settings.verifier_model))
+        guard.verifier = CrossEncoderVerifier(guard.metadata.get("verifier_model", settings.verifier_model),
+                                              memo_size=settings.verifier_memo_size)
     budget = DailyBudget(settings.daily_backend_calls) if settings.daily_backend_calls else None
     return CacheGuardService(embedder, store, backend, clusterer, guard, budget)
