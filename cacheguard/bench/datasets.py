@@ -19,8 +19,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
+if TYPE_CHECKING:  # pandas is a bench-only dependency; imported where data is loaded
+    import pandas as pd
 
 _SOURCES = {
     "qqp": ("nyu-mll/glue", "qqp/validation-00000-of-00001.parquet", "question1", "question2"),
@@ -41,6 +43,7 @@ class PairSet:
 
 
 def _download(source: str, cache_dir: Path) -> pd.DataFrame:
+    import pandas as pd  # bench extra: pip install -e ".[bench]"
     from huggingface_hub import hf_hub_download
 
     repo, filename, _, _ = _SOURCES[source]
