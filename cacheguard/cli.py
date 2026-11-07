@@ -28,7 +28,8 @@ def main() -> None:
             print("\nCache miss, searched documents")
         for source in result.response.sources[:3]:
             print(f"  [{source.score:.3f}] {source.newsgroup}: {source.snippet[:160]}")
-        print(f"  {result.latency_ms:.1f} ms | {service.cache.stats()}\n")
+        stats = service.store.stats()
+        print(f"  {result.latency_ms:.1f} ms | entries {stats['total_entries']}, hit rate {stats['hit_rate']:.0%}\n")
 
 
 if __name__ == "__main__":

@@ -5,11 +5,12 @@ import numpy as np
 import pytest
 
 from cacheguard.backends.newsgroups import NewsgroupsSearchBackend
-from cacheguard.cache import SemanticCache
 from cacheguard.clustering import SoftClusterer
 from cacheguard.data.newsgroups import Document
 from cacheguard.embeddings import normalize_rows
+from cacheguard.policy import GlobalThreshold
 from cacheguard.service import CacheGuardService
+from cacheguard.store import CacheStore
 from cacheguard.vector_index import VectorIndex
 
 
@@ -55,4 +56,21 @@ def service(embedder, documents):
     embeddings = embedder.encode([d.text for d in documents])
     backend = NewsgroupsSearchBackend(documents, VectorIndex.from_embeddings(embeddings), top_k=3)
     clusterer = SoftClusterer(n_clusters=2, covariance_type="diag").fit(embeddings)
-    return CacheGuardService(embedder, SemanticCache(threshold=0.85), backend, clusterer)
+    store = CacheStore(embedder.dim, GlobalThreshold(0.85))
+    return CacheGuardService(embedder, store, backend, clusterer)
+
+
+class FakeClock:
+    def __init__(self, now: float = 1_000_000.0):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()

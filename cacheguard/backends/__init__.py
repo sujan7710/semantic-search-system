@@ -25,6 +25,13 @@ class BackendResponse:
     answer: str
     sources: tuple[Source, ...] = field(default_factory=tuple)
 
+    def to_dict(self) -> dict:
+        return {"answer": self.answer, "sources": [vars(s) for s in self.sources]}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> BackendResponse:
+        return cls(answer=data["answer"], sources=tuple(Source(**s) for s in data.get("sources", ())))
+
 
 class Backend(Protocol):
     name: str
