@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cacheguard"
+version = "0.1.0"
+description = "A semantic cache that knows when it's wrong."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi==0.135.1",
+    "uvicorn==0.41.0",
+    "pydantic==2.12.5",
+    "sentence-transformers==5.2.3",
+    "faiss-cpu==1.13.2",
+    "scikit-learn==1.8.0",
+    "numpy==2.3.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "httpx==0.28.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["cacheguard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

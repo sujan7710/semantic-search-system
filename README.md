@@ -1,250 +1,126 @@
-# Semantic Search System with Fuzzy Clustering and Semantic Cache
+# CacheGuard
 
-This project implements a lightweight semantic search system using the **20 Newsgroups dataset**.  
-The system combines **vector embeddings, fuzzy clustering, semantic caching, and a FastAPI service** to efficiently retrieve semantically similar documents.
+**A semantic cache that knows when it's wrong.**
 
-This project was developed as part of the **Trademarkia AI/ML Engineer Assignment**.
+CacheGuard sits in front of an answer backend (today a document search, later an LLM via Groq). When a new question means the same thing as one it has already answered, it returns the saved answer instantly instead of calling the backend again. The goal of the project is to do that *without* serving wrong answers for questions that look alike but are different ("cancel my order" vs "don't cancel my order"), and to measure exactly how often that happens.
 
----
+> **Status: Phase 0 (foundation).** The project grew out of a 20 Newsgroups semantic search system (preserved at the git tag `v0-newsgroups-search`). This phase restructures it, fixes measured bugs, and adds tests. It does not add new features yet. See [Roadmap](#roadmap).
 
-# System Overview
+## How a request flows
 
-The system pipeline:
+```
+question ─► embed (MiniLM) ─► nearest cached question ─► similarity ≥ threshold?
+                                                            │yes          │no
+                                                            ▼             ▼
+                                                  return cached answer   ask backend
+                                                                          │
+                                                                  store answer in cache
+```
 
-User Query  
-↓  
-Sentence Embedding  
-↓  
-Semantic Cache Check  
-↓  
-Cache Hit → Return Cached Result  
-Cache Miss → FAISS Vector Search  
-↓  
-Determine Dominant Cluster  
-↓  
-Store Result in Cache  
+## Quick start
 
----
+```bash
+pip install -e ".[dev]"
+```
 
-# Optimization & Design Decisions
+Download the [20 Newsgroups dataset](https://archive.ics.uci.edu/dataset/113/twenty+newsgroups) and extract it so the folders are at `data/20_newsgroups/<newsgroup>/`.
 
-Several design decisions were made to balance performance, scalability, and semantic accuracy.
+Build the search index (embeds ~19k documents; takes a few minutes on CPU):
 
-## Embedding Model Selection
+```bash
+python -m cacheguard.build
+```
 
-The model used for generating embeddings is:
+Run the API, then open http://127.0.0.1:8000/docs:
 
-sentence-transformers/all-MiniLM-L6-v2
+```bash
+uvicorn cacheguard.api:create_default_app --factory
+```
 
-This model was selected because:
+Or use the terminal client:
 
-It produces high-quality sentence embeddings suitable for semantic similarity tasks.
+```bash
+python -m cacheguard.cli
+```
 
-It is lightweight (~80MB) compared to larger transformer models.
+Run the tests (no model download needed; they use a small fake embedder):
 
-It offers a strong balance between accuracy and inference speed, which is important for API-based systems.
+```bash
+pytest
+```
 
-It is widely used in production semantic search systems.
+## API
 
-This allows the system to generate embeddings efficiently while still preserving semantic meaning between documents and queries.
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/query` | Answer a query, from cache when possible |
+| `GET` | `/cache/stats` | Entries, hits, misses, hit rate, threshold |
+| `DELETE` | `/cache` | Clear the cache |
+| `GET` | `/health` | Liveness and backend name |
 
-## Vector Database Choice
-
-The system uses FAISS (Facebook AI Similarity Search) for vector indexing.
-
-FAISS was chosen because:
-
-It is optimized for high-dimensional vector similarity search.
-
-It provides extremely fast nearest-neighbor retrieval.
-
-It is widely used in large-scale semantic search and recommendation systems.
-
-For this dataset (~20k vectors), the IndexFlatL2 index was selected since it performs exact nearest neighbor search, which is sufficiently fast for datasets of this size.
-
-## Fuzzy Clustering Approach
-
-The assignment requires soft clustering rather than hard cluster assignments.
-
-To satisfy this requirement, the system uses:
-
-Gaussian Mixture Models (GMM)
-
-Unlike algorithms such as K-Means that assign each document to a single cluster, GMM provides a probability distribution across clusters.
-
-Example:
-
-Cluster 1 → 0.12
-Cluster 2 → 0.73
-Cluster 3 → 0.15
-
-This reflects the reality that many documents belong to multiple overlapping topics, which is common in discussion forums such as newsgroups.
-
-## Choice of Number of Clusters (n = 10)
-
-The dataset contains 20 labeled categories, but many of these categories are semantically related.
-
-Examples include:
-
-comp.graphics
-
-comp.windows.x
-
-comp.sys.mac.hardware
-
-These categories belong to the broader computer technology domain.
-
-Using 10 clusters allows the system to capture broader thematic groups while still preserving meaningful topic separation.
-
-A smaller number of clusters also helps:
-
-reduce model complexity
-
-improve clustering stability
-
-improve cache lookup efficiency
-
-## Semantic Cache Design
-
-The cache stores query embeddings instead of raw text queries.
-
-When a new query arrives:
-
-The query is converted into an embedding.
-
-Cosine similarity is computed against cached embeddings.
-
-If similarity exceeds a threshold (0.85), the cached result is reused.
-
-This enables the system to recognize semantically similar queries such as:
-
-"space rocket launch"
-"satellite launch mission"
-
-even though the wording differs.
-
-## Persistence for Faster Startup
-
-Two expensive computations are persisted to disk:
-
-embeddings.npy  → document embeddings
-gmm_model.pkl   → trained clustering model
-
-Persisting these artifacts prevents recomputation on every server startup.
-
-This reduces API startup time from approximately 40–60 seconds to under 3 seconds.
-
-## Cluster-aware Cache Lookup
-
-Each cached query is associated with its dominant cluster.
-
-This allows future optimization where cache lookup can be restricted to queries within the same cluster, improving lookup efficiency as the cache grows.
-
-This design ensures the system is:
-
-fast
-
-scalable
-
-semantically meaningful
-
-aligned with real-world search architectures
-
-##  FastAPI Service
-
-The system is exposed through a FastAPI API.
-
-Endpoints:
-
-### POST /query
-
-### POST /query
-
-**Input**
+`POST /query` with `{"query": "space shuttle launch delays"}` returns:
 
 ```json
 {
-  "query": "space rocket launch"
+  "query": "space shuttle launch delays",
+  "cache_hit": false,
+  "matched_query": null,
+  "cache_similarity": 0.41,
+  "dominant_cluster": 3,
+  "answer": "…best matching post…",
+  "sources": [{"doc_id": 1234, "newsgroup": "sci.space", "score": 0.62, "snippet": "…"}],
+  "latency_ms": 18.4
 }
 ```
 
-**Output**
+`cache_similarity` is the cosine similarity to the nearest cached query, whether or not it was a hit (`null` when the cache is empty). `sources[].score` is the cosine similarity between the query and each document.
 
-```json
-{
-  "query": "space rocket launch",
-  "cache_hit": true,
-  "matched_query": "rocket launch in space",
-  "similarity_score": 0.91,
-  "result": "...",
-  "dominant_cluster": 3
-}
+## Project layout
+
+```
+cacheguard/
+  config.py          settings (override with CACHEGUARD_* env vars)
+  embeddings.py      sentence-transformers wrapper, unit-normalized output
+  vector_index.py    FAISS exact inner-product (cosine) index
+  cache.py           baseline semantic cache: linear scan, one global threshold
+  clustering.py      Gaussian mixture soft clustering, saved as .npz (no pickle)
+  backends/          what answers on a cache miss (newsgroups search for now)
+  data/newsgroups.py loading, cleaning and de-duplicating the corpus
+  artifacts.py       build/save/load the precomputed index, with a manifest
+  service.py         the request path: embed, look up, answer, store
+  api.py             FastAPI app
+  build.py, cli.py   command-line entry points
+tests/               pytest suite
 ```
 
----
+## What Phase 0 fixed, and why
 
-### GET /cache/stats
+These came from measuring the original system rather than reading it:
 
-Returns cache statistics.
+| Problem found | Evidence | Fix |
+|---|---|---|
+| **Label leakage.** Cleaning removed only `From:`/`Subject:`, so `Xref`/`Path`/`Newsgroups` headers (which name the newsgroup) stayed in every document and were embedded. They also used up much of MiniLM's 256-token window. | 19,997 of 19,997 cleaned docs still contained the headers. | Drop the whole header block, quoted replies and signatures (`data/newsgroups.py`). |
+| **Duplicate documents.** Cross-posted messages appear once per newsgroup. | 663 exact duplicate bodies. | De-duplicate after cleaning. |
+| **Misleading score.** On a cache miss, `similarity_score` reported the nearest *cache* similarity, not a retrieval score. | Code review. | Separate `cache_similarity` and per-source `score`, top-k results instead of one. |
+| **Unsafe model loading.** The clustering model was a pickle file, which can execute code when loaded. | `joblib.load`. | Store the mixture's arrays in `.npz` and load with `allow_pickle=False`. |
+| **Large binaries in git.** ~48 MB of generated files were committed. | `embeddings.npy`, `gmm_model.pkl`. | Untracked; rebuilt by `cacheguard.build` with a manifest that detects stale indexes. |
+| **Cache not thread-safe.** FastAPI runs sync endpoints in a thread pool. | Code review. | Lock around cache reads and writes. |
+| **Fragile loader.** Bare `except:`, label ids counted stray files, unpinned dependencies, no tests. | Code review. | Specific error handling, sorted folder-based labels, pinned `pyproject.toml`, 28 tests. |
 
-```json
-{
-  "total_entries": 42,
-  "hit_count": 17,
-  "miss_count": 25,
-  "hit_rate": 0.405
-}
-```
+**Known issue, deferred to Phase 3:** the Gaussian mixture is "soft" in name only. With full covariance in 384 dimensions, over 99.9% of documents get more than 0.99 probability for a single cluster. It will be reworked when clusters start driving per-cluster cache thresholds.
 
----
+## Roadmap
 
-### DELETE /cache
+| Phase | Goal |
+|---|---|
+| 0 | Foundation: restructure, fix measured bugs, tests *(this phase)* |
+| 1 | Benchmark harness: paraphrase datasets (QQP, PAWS) and hard negatives; measure the baseline cache's hit rate vs wrong-hit rate |
+| 2 | Cache core: FAISS-backed cache, persistence, expiry and eviction, partitioning by model/tenant |
+| 3 | Correctness: calibrated and per-cluster thresholds, verifier for borderline matches |
+| 4 | Gateway: Groq LLM backend, OpenAI-compatible API, demo chat page |
+| 5 | Operations: metrics, dashboard, load tests, Docker, deployment |
+| 6 | Write-up: results, design decisions, what didn't work |
 
-Clears the semantic cache.
+## Tech
 
-
-## Dataset
-
-The system uses the 20 Newsgroups dataset:
-
-https://archive.ics.uci.edu/dataset/113/twenty+newsgroups
-
-The dataset contains ~20,000 documents across 20 topic categories.
-
-## Installation
-
-Clone repository:
-
-git clone https://github.com/sujan7710/semantic-search-system.git
-cd semantic-search-system
-
-Install dependencies:
-
-pip install -r requirements.txt
-
-## Running the API
-
-Start the server:
-
-uvicorn app:app --reload
-
-Open API docs:
-
-http://127.0.0.1:8000/docs
-
-## Technologies Used:
-
-Python
-
-FastAPI
-
-Sentence Transformers
-
-FAISS
-
-Scikit-learn
-
-NumPy
-
-
-
+Python, FastAPI, sentence-transformers (`all-MiniLM-L6-v2`), FAISS, scikit-learn, NumPy, pytest.
