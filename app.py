@@ -62,7 +62,7 @@ def query_system(request: QueryRequest):
             "matched_query": entry["query"],
             "similarity_score": float(score),
             "result": entry["result"][:300],
-            "dominant_cluster": entry["cluster"]
+            "dominant_cluster": int(entry["cluster"])
         }
 
     # If cache miss, search vector database
@@ -71,9 +71,9 @@ def query_system(request: QueryRequest):
     best_doc = documents[indices[0]]
 
     # Determine cluster for the query
-    query_cluster = clusterer.get_dominant_clusters(
-        np.array([query_embedding])
-    )[0]
+    query_cluster = int(clusterer.get_dominant_clusters(
+    np.array([query_embedding])
+)[0])
 
     # Store result in cache
     cache.add(query, query_embedding, best_doc, query_cluster)
