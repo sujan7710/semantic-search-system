@@ -41,6 +41,19 @@ def _optional_int(name: str, default: int | None) -> int | None:
     return None if raw.strip().lower() in {"", "none", "off"} else int(raw)
 
 
+def _secret(raw: str) -> str:
+    """Strip whitespace and one pair of surrounding quotes.
+
+    `docker run --env-file` and some hosting dashboards pass quotes through
+    literally (GROQ_API_KEY="gsk_..." arrives with the quotes), which Groq
+    then rejects as an invalid key.
+    """
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    return value
+
+
 def _flag(name: str, default: bool) -> bool:
     return _env(name, "on" if default else "off").strip().lower() not in {"off", "0", "false", "no"}
 
@@ -100,7 +113,7 @@ class Settings:
         return cls(
             backend=_env("BACKEND", d.backend).strip().lower(),
             mock_delay_ms=float(_env("MOCK_DELAY_MS", d.mock_delay_ms)),
-            groq_api_key=os.environ.get("GROQ_API_KEY", "").strip(),
+            groq_api_key=_secret(os.environ.get("GROQ_API_KEY", "")),
             groq_model=_env("GROQ_MODEL", d.groq_model),
             groq_base_url=_env("GROQ_BASE_URL", d.groq_base_url),
             groq_reasoning_effort=_env("GROQ_REASONING_EFFORT", d.groq_reasoning_effort).strip(),
@@ -130,7 +143,7 @@ class Settings:
             rate_limit_per_minute=_optional_int("RATE_LIMIT_PER_MINUTE", d.rate_limit_per_minute),
             daily_backend_calls=_optional_int("DAILY_BACKEND_CALLS", d.daily_backend_calls),
             trust_proxy=_flag("TRUST_PROXY", d.trust_proxy),
-            admin_token=_env("ADMIN_TOKEN", d.admin_token).strip(),
+            admin_token=_secret(_env("ADMIN_TOKEN", d.admin_token)),
             allow_unguarded=_flag("ALLOW_UNGUARDED", d.allow_unguarded),
         )
 

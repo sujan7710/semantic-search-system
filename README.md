@@ -325,6 +325,13 @@ What the experiments showed:
   - cache stored on `/data`, and the port taken from `$PORT`.
 - **CI** ([ci.yml](.github/workflows/ci.yml)): runs the tests on CPU-only PyTorch (no model downloads, no API key), then builds the image, starts it with the mock backend, and checks the demo page, a query and `/metrics`.
 - **Deployment guide:** [docs/DEPLOY.md](docs/DEPLOY.md) (memory needs, environment, hosting options).
+- **Image verified locally.**
+  - The image is 2.76 GB, ready in 16 s, and reports healthy.
+  - Against real Groq inside the container: a paraphrase hit in 84 ms, and a Japan → Korea swap refused by the name rule.
+  - The cache survived `docker restart` on the `/data` volume, and no log line contained the key.
+  - The first clean build caught two bugs a local setup hid:
+    - Unpinned `transformers`/`huggingface_hub` resolved to newer releases that fail to import with PyTorch 2.5.1. The model stack is now pinned to the tested versions.
+    - `docker --env-file` passed the quotes around `GROQ_API_KEY` through literally, so Groq rejected the key. Secrets are now stripped of surrounding quotes.
 
 **Load test** ([report](benchmarks/results/phase5_load/README.md)). The test used real Quora paraphrase groups and a mock LLM with 600 ms latency, so it costs nothing and isn't limited by Groq's rate limits. The verifier memo was off.
 

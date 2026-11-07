@@ -7,12 +7,12 @@ CacheGuard ships as one Docker image (see [Dockerfile](../Dockerfile)): the API,
 
 | Need | Value | Why |
 |---|---|---|
-| Memory | **1 GB minimum, 2 GB comfortable** | Measured ~660 MB resident with both models loaded |
+| Memory | **1 GB minimum, 2 GB comfortable** | Measured 370 MiB–1.0 GiB in the container under Docker Desktop, depending on recent load (~660 MB natively on Windows) |
 | CPU | 1–2 vCPU | The verifier is CPU-bound (~30–50 ms per check); see the [load test](../benchmarks/results/phase5_load/README.md) |
 | Port | `$PORT` (default 8000) | The container listens on whatever `PORT` the platform sets |
 | Secret | `GROQ_API_KEY` | Set as a platform secret, never in the image or the repo |
 | Disk (optional) | a volume at `/data` | Keeps the cache (`/data/cache.sqlite3`) across restarts; without it the cache starts empty after each deploy |
-| Startup | ~20–40 s | Loading and warming up both models; give the health check a start period |
+| Startup | ~15–40 s | Ready in 16 s locally (loading and warming up both models); give the health check a start period |
 
 Recommended environment for a public demo:
 
@@ -38,6 +38,10 @@ docker run --rm -p 8000:8000 --env-file .env -v cacheguard-data:/data cacheguard
 ```
 
 Open http://127.0.0.1:8000/.
+
+`docker --env-file` does not strip quotes (`GROQ_API_KEY="gsk_..."` arrives with the quote marks). CacheGuard strips
+one pair of surrounding quotes from its secrets for this reason, but other variables are taken literally, so leave
+quotes out of env files used with Docker.
 
 ## Hosting options
 

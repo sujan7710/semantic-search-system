@@ -145,6 +145,13 @@ def test_dotenv_does_not_override_environment(tmp_path, monkeypatch):
     assert Settings.from_env(dotenv=None).resolved_backend() == "newsgroups"
 
 
+@pytest.mark.parametrize("raw", ['"gsk_abc"', "'gsk_abc'", "  gsk_abc \r", '" gsk_abc "'])
+def test_secrets_tolerate_quotes_passed_through_by_docker_env_files(monkeypatch, raw):
+    # `docker run --env-file` keeps quotes literally; Groq would reject the key.
+    monkeypatch.setenv("GROQ_API_KEY", raw)
+    assert Settings.from_env(dotenv=None).groq_api_key == "gsk_abc"
+
+
 # --- service + API with the Groq backend --------------------------------------------------
 
 @pytest.fixture
