@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cacheguard"
+version = "1.0.0"
+description = "A semantic cache that knows when it's wrong."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi==0.135.1",
+    "uvicorn==0.41.0",
+    "pydantic==2.12.5",
+    "httpx==0.28.1",
+    "sentence-transformers==5.2.3",
+    # The model-loading stack is pinned to the versions the guard was calibrated
+    # and tested with. Left unpinned, a clean Docker build pulled transformers
+    # 5.22 / huggingface_hub 2.4, which fail to import with torch 2.5.1.
+    "torch==2.5.1",
+    "transformers==5.3.0",
+    "tokenizers==0.22.2",
+    "huggingface_hub==1.6.0",
+    "safetensors==0.7.0",
+    "faiss-cpu==1.13.2",
+    "scikit-learn==1.8.0",
+    "numpy==2.3.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "httpx==0.28.1",
+]
+bench = [
+    "pandas==2.3.3",
+    "pyarrow==23.0.1",
+    "matplotlib==3.10.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["cacheguard*"]
+
+[tool.setuptools.package-data]
+cacheguard = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

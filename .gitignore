@@ -1,4 +1,15 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
 .env
+
+# Raw dataset (download separately, see README)
 data/
+
+# Generated index files: rebuild with `python -m cacheguard.build`
+artifacts/
+*.npy
+*.npz
+*.pkl

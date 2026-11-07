@@ -1,295 +1,195 @@
-# Semantic Search System with Fuzzy Clustering and Semantic Cache
+# CacheGuard
 
-This project implements a lightweight **semantic search system** built on the **20 Newsgroups dataset**.  
-It combines **sentence embeddings, vector similarity search, fuzzy clustering, and a semantic cache layer** to retrieve semantically relevant documents efficiently.
+[![CI](https://github.com/sujan7710/semantic-search-system/actions/workflows/ci.yml/badge.svg)](https://github.com/sujan7710/semantic-search-system/actions/workflows/ci.yml)
 
-The system exposes a **FastAPI service** that allows users to query documents using natural language.
+**A semantic cache for LLM APIs that knows when it's wrong.**
 
----
+CacheGuard sits between an app and an LLM API (Groq). When a new question means the same thing as one it has already
+answered, it returns the saved answer in milliseconds instead of paying for another AI call. The hard part, and the
+point of the project, is **not** reusing an answer when two questions only *look* alike:
+"How do I cancel my order?" vs "How do I **not** cancel my order?", "Is **5** hours of sleep enough?" vs "Is **8**
+hours…?". A plain semantic cache gets those wrong most of the time. CacheGuard measures how often, and fixes it.
 
-# System Overview
-```
-The system pipeline:
+## Result
 
-User Query
-   ↓
-Sentence Embedding
-   ↓
-Semantic Cache Check
-   ↓
-Cache Hit → Return Cached Result
-Cache Miss → FAISS Vector Search
-   ↓
-Determine Dominant Cluster
-   ↓
-Store Result in Cache
-```
+Replaying the same 26,858-question test stream (real Quora questions plus 2,000 generated look-alikes) through both:
 
----
+| | Correct answers from cache | Wrong answers from cache | Look-alikes served the wrong answer |
+|---|---|---|---|
+| Plain semantic cache (similarity ≥ 0.85) | 4,377 | **2,061** | 1,303 of 1,998 |
+| **CacheGuard** (calibrated for a 5% error budget) | 4,231 | **241 (−88%)** | **74 of 1,998** |
 
-# Optimization & Design Decisions
+**88% fewer wrong answers while keeping 97% of the useful reuse.** The error budget was chosen on separate calibration
+data and held on the test data (5.4% measured). With the plain cache, every threshold from 0.75 to 0.99 serves
+32–39% wrong answers: a typical negated question scores 0.98 similarity to the original, while only 20% of real paraphrases even reach 0.95.
 
-Several design decisions were made to balance performance, scalability, and semantic accuracy.
+![Guard vs threshold-only cache](benchmarks/results/phase3_guard/frontier.png)
 
-## Embedding Model Selection
+## See it
 
-The model used for generating embeddings is:
+![CacheGuard demo: the phone question looks like the cached laptop question, the verifier refuses the match, and the panel shows a plain cache would have served the laptop answer](docs/images/demo.jpg)
 
-sentence-transformers/all-MiniLM-L6-v2
+The demo page answers with a real LLM and explains every decision: the closest cached question, the similarity, which
+check passed or failed, and what a plain cache would have done instead. Above, "How do I make my **phone** battery last
+longer?" is refused even though it is 0.865 similar to the cached **laptop** question.
 
-This model was selected because:
+## How it works
 
-It produces high-quality sentence embeddings suitable for semantic similarity tasks.
-
-It is lightweight (~80MB) compared to larger transformer models.
-
-It offers a strong balance between accuracy and inference speed, which is important for API-based systems.
-
-It is widely used in production semantic search systems.
-
-This allows the system to generate embeddings efficiently while still preserving semantic meaning between documents and queries.
-
-## Vector Database Choice
-
-The system uses FAISS (Facebook AI Similarity Search) for vector indexing.
-
-FAISS was chosen because:
-
-It is optimized for high-dimensional vector similarity search.
-
-It provides extremely fast nearest-neighbor retrieval.
-
-It is widely used in large-scale semantic search and recommendation systems.
-
-For this dataset (~20k vectors), the IndexFlatL2 index was selected since it performs exact nearest neighbor search, which is sufficiently fast for datasets of this size.
-
-## Fuzzy Clustering Approach
-
-This requires soft clustering rather than hard cluster .
-
-To satisfy this requirement, the system uses:
-
-Gaussian Mixture Models (GMM)
-
-Unlike algorithms such as K-Means that assign each document to a single cluster, GMM provides a probability distribution across clusters.
-
-Example:
-
-Cluster 1 → 0.12
-Cluster 2 → 0.73
-Cluster 3 → 0.15
-
-This reflects the reality that many documents belong to multiple overlapping topics, which is common in discussion forums such as newsgroups.
-
-## Choice of Number of Clusters (n = 10)
-
-The dataset contains 20 labeled categories, but many of these categories are semantically related.
-
-Examples include:
-
-comp.graphics
-
-comp.windows.x
-
-comp.sys.mac.hardware
-
-These categories belong to the broader computer technology domain.
-
-Using 10 clusters allows the system to capture broader thematic groups while still preserving meaningful topic separation.
-
-A smaller number of clusters also helps:
-
-reduce model complexity
-
-improve clustering stability
-
-improve cache lookup efficiency
-
-## Semantic Cache Design
-
-The cache stores query embeddings instead of raw text queries.
-
-When a new query arrives:
-
-The query is converted into an embedding.
-
-Cosine similarity is computed against cached embeddings.
-
-If similarity exceeds a threshold (0.85), the cached result is reused.
-
-This enables the system to recognize semantically similar queries such as:
-
-"space rocket launch"
-"satellite launch mission"
-
-even though the wording differs.
-
-## Persistence for Faster Startup
-
-Two expensive computations are persisted to disk:
-
-embeddings.npy  → document embeddings
-gmm_model.pkl   → trained clustering model
-
-Persisting these artifacts prevents recomputation on every server startup.
-
-This reduces API startup time from approximately 40–60 seconds to under 3 seconds.
-
-## Cluster-aware Cache Lookup
-
-Each cached query is associated with its dominant cluster.
-
-This allows future optimization where cache lookup can be restricted to queries within the same cluster, improving lookup efficiency as the cache grows.
-
-This design ensures the system is:
-
-fast
-
-scalable
-
-semantically meaningful
-
-aligned with real-world search architectures
-
-##  FastAPI Service
-
-The system is exposed through a FastAPI API.
-
-Endpoints:
-
-### POST /query
-
-**Input**
-
-```json
-{
-  "query": "space rocket launch"
-}
+```mermaid
+flowchart TD
+    Q["Question"] --> N["Find the nearest cached question<br/>MiniLM embedding + FAISS, searched only within<br/>the exact partition: tenant, model, prompt, conversation"]
+    N --> G{"Close enough?"}
+    G -- yes --> R{"Swap found?"}
+    R -- no --> V{"Verified same?"}
+    V -- yes --> H["Hit: return the cached answer<br/>~10–80 ms"]
+    G -- no --> M["Miss: ask Groq, ~0.3–1 s<br/>then store the answer (SQLite + FAISS)"]
+    R -- yes --> M
+    V -- no --> M
 ```
 
-**Output**
+- **Only the last question is matched by meaning.** Tenant, model, system prompt, temperature and earlier conversation
+  turns are part of an exact partition key, so similarity never decides whether one user gets another user's answer.
+- **Cheapest check first.** *Close enough?* is a similarity gate (free). *Swap found?* is a set of rules that look for a
+  negation, number or name swapped between the two questions (~0.1 ms). *Verified same?* is a cross-encoder (~30 ms)
+  that must score ≥ 0.9, run only on candidates that survive both. It reads the two questions together, which separates them far better than
+  comparing two embeddings (AUC 0.961 vs 0.875 on the same Quora pairs).
+- **Calibrated, not hand-tuned.** The gate, the verifier cut-off and whether the rules run are chosen by scoring 348
+  settings against a stated error budget on held-out data.
+- **Built to run in public.** Expiry, LRU eviction and tag invalidation; a persistent store; an OpenAI-compatible
+  endpoint; per-visitor rate limits and a daily AI-call budget; Prometheus metrics; logs that never contain the
+  question text.
 
-```json
-{
-  "query": "space rocket launch",
-  "cache_hit": true,
-  "matched_query": "rocket launch in space",
-  "similarity_score": 0.91,
-  "result": "...",
-  "dominant_cluster": 3
-}
-```
+The full engineering story, including what didn't work, is in **[docs/DESIGN.md](docs/DESIGN.md)**.
 
----
+## Quick start
 
-### GET /cache/stats
-
-Returns cache statistics.
-
-```json
-{
-  "total_entries": 42,
-  "hit_count": 17,
-  "miss_count": 25,
-  "hit_rate": 0.405
-}
-```
-
----
-
-### DELETE /cache
-
-Clears the semantic cache.
-
-
-## Dataset
-
-The system uses the 20 Newsgroups dataset:
-
-https://archive.ics.uci.edu/dataset/113/twenty+newsgroups
-
-The dataset contains ~20,000 documents across 20 topic categories.
-
-## Installation
-
-Clone repository:
-
-```bash
-git clone https://github.com/sujan7710/semantic-search-system.git
-cd semantic-search-system
-```
-
-## Virtual Environment Setup
-
-Create a virtual environment:
+Requires Python 3.10+.
 
 ```bash
 python -m venv venv
 ```
 
-Activate the environment.
-
-Windows:
-venv\Scripts\activate
-
-Install dependencies:
-
-pip install -r requirements.txt
-
-## Running the API
-
-Start the server:
+Activate it (Windows: `venv\Scripts\activate`; macOS/Linux: `source venv/bin/activate`), then install:
 
 ```bash
-uvicorn app:app --reload
+pip install -e ".[dev]"
 ```
 
-Open API docs:
+Copy `.env.example` to `.env` and set `GROQ_API_KEY` (free key from the [Groq console](https://console.groq.com/keys)).
+Then start the server and open http://127.0.0.1:8000/ (API docs at `/docs`). The first start downloads the two models
+(~420 MB):
 
-http://127.0.0.1:8000/docs
-
-## Technologies Used:
-
-Python
-FastAPI
-Sentence Transformers
-FAISS
-Scikit-learn
-NumPy
-
-## Project Structure
-```
-semantic-search-system/
-│
-├── app.py               # FastAPI server
-├── main.py              # CLI testing entry
-│
-├── dataset_loader.py    # Dataset ingestion
-├── preprocessing.py     # Text cleaning
-├── embeddings.py        # Embedding model wrapper
-├── vector_store.py      # FAISS index
-├── clustering.py        # Fuzzy clustering (GMM)
-├── semantic_cache.py    # Semantic cache logic
-│
-├── embeddings.npy       # Persisted embeddings
-├── gmm_model.pkl        # Saved clustering model
-│
-├── requirements.txt
-└── README.md
+```bash
+uvicorn cacheguard.api:create_default_app --factory
 ```
 
-## Future Improvements
+Share a public demo link from your PC, with no hosting account (Cloudflare quick tunnel; see
+[docs/DEPLOY.md](docs/DEPLOY.md)):
 
-Possible improvements for production systems:
+```bash
+powershell -ExecutionPolicy Bypass -File deploy\tunnel.ps1
+```
 
-- Cluster-aware cache lookup to further improve retrieval efficiency.
-- Approximate nearest neighbor search for very large datasets.
-- Docker containerization for easier deployment.
-- Deployment on cloud platforms (AWS / GCP).
-- Monitoring cache performance and adaptive similarity thresholds.
+Or run the Docker image:
 
-## Author
+```bash
+docker build -t cacheguard .
+```
 
-Sujan M  
-B.Tech Computer Science  
-VIT Vellore
+```bash
+docker run --rm -p 8000:8000 --env-file .env cacheguard
+```
+
+Run the tests (no model downloads, no API key: they use a fake embedder, verifier and Groq):
+
+```bash
+pytest
+```
+
+## Use it from code
+
+Any OpenAI client works by changing its base URL. The reply carries an extra `cacheguard` field saying whether it came
+from cache and why.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="unused")
+reply = client.chat.completions.create(
+    model="openai/gpt-oss-20b",
+    messages=[{"role": "user", "content": "How do I make my laptop battery last longer?"}],
+)
+print(reply.choices[0].message.content)
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /` | Demo chat page |
+| `POST /v1/chat/completions` | OpenAI-compatible (non-streaming) |
+| `POST /query` | Ask a question; the response explains the cache decision |
+| `POST /explain` | Dry run: what a plain cache and the guard would decide (no AI call, nothing stored) |
+| `GET /stats`, `GET /metrics` | Hits, decisions by reason, tokens and dollars saved; Prometheus metrics |
+| `POST /cache/invalidate`, `DELETE /cache…` | Drop answers by tag, namespace or entry (admin token) |
+
+All settings: **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
+
+## Benchmarks
+
+Every number in this README comes from a committed, reproducible report:
+
+| Report | What it measures | Reproduce |
+|---|---|---|
+| [Baseline](benchmarks/results/phase1_baseline/README.md) | How often a plain threshold cache is wrong (QQP, PAWS, look-alikes) | `python -m cacheguard.bench.run` |
+| [Guard](benchmarks/results/phase3_guard/README.md) | Calibrated guard vs threshold on the same test stream, with ablations | `python -m cacheguard.bench.guard_eval` |
+| [Scale](benchmarks/results/phase2_scale/README.md) | Lookup latency at 10k–200k cached entries; FAISS vs list scan vs HNSW | `python -m cacheguard.bench.scale` |
+| [Load](benchmarks/results/phase5_load/README.md) | Throughput and latency at 1–32 concurrent users | `python -m cacheguard.bench.loadtest` |
+
+Benchmarks need the extra dependencies: `pip install -e ".[bench]"`. They download QQP and PAWS (~6 MB) from Hugging
+Face.
+
+## What didn't work
+
+Some of the most useful results were failures. A few are below; the full list is in
+[DESIGN.md](docs/DESIGN.md#7-what-didnt-work).
+
+- **Counting every unlabeled hit as wrong** inflated the baseline's error rate: 64% of high-similarity "errors" were
+  real paraphrases that annotators had simply never compared.
+- **Rules that rejected any differing number or name** threw away 37% of real paraphrases ("best laptop?" vs "best
+  laptop under 40k?"). Requiring a *swap* cut that to 10%.
+- **Per-topic guard settings** looked better on calibration data and were noise on test, so they weren't shipped.
+- **PyTorch's default threading** made a cache *hit* slower than the AI call it replaced at 32 concurrent users (869 ms).
+  One thread per inference gave +42% throughput.
+
+**Known limits:**
+- **Domain:** the verifier is trained on Quora-style questions, so other domains need their own calibration data.
+- **Word order:** paraphrases that differ by word order (PAWS) remain unsolved.
+- **CPU:** the server is CPU-bound beyond ~30 concurrent users.
+
+## Project layout
+
+```
+cacheguard/
+  api.py, service.py   HTTP API, demo page route, request path
+  guard.py, verify.py  hit decision: gate, rules, cross-encoder; calibrated settings
+  store.py             partitioned FAISS + SQLite store: TTL, LRU, tag invalidation
+  backends/            groq.py (LLM), newsgroups.py (original search), mock.py (load tests)
+  limits.py, metrics.py
+  bench/               datasets, look-alike generator, replay, calibration, scale and load tests
+  static/demo.html     the demo page (no build step, no external assets)
+configs/guard/         shipped guard settings
+benchmarks/results/    committed benchmark reports
+deploy/                tunnel.ps1 (public demo from a PC), cloudrun.sh (Google Cloud Run)
+docs/                  DESIGN.md, DEPLOY.md, CONFIGURATION.md
+tests/                 112 tests
+```
+
+## Origin
+
+CacheGuard started as a 20 Newsgroups semantic search assignment (MiniLM embeddings, FAISS, mixture-model clustering
+and a fixed-threshold semantic cache), preserved at the git tag `v0-newsgroups-search`. Measuring that system turned
+up label leakage that inflated its retrieval quality by about 10 points, and a cache that had never been asked how
+often it was wrong. Answering that question became this project. Without a Groq key, CacheGuard still falls back to
+the original newsgroups search as its backend.
+
+**Tech:** Python, FastAPI, Groq (OpenAI-compatible API via httpx), sentence-transformers (MiniLM embeddings,
+`quora-distilroberta-base` cross-encoder), FAISS, SQLite, scikit-learn, Docker, GitHub Actions, pytest.

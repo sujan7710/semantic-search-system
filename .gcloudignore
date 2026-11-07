@@ -1,0 +1,19 @@
+# Files gcloud must NOT upload to Cloud Build with `gcloud run deploy --source .`
+# Secrets: the Groq key lives in Secret Manager, never in the upload.
+.env
+.env.*
+!.env.example
+# Not needed to build the image
+.git
+.github
+.claude
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.venv
+*.egg-info
+data/
+artifacts/
+benchmarks/
+tests/
+docs/
