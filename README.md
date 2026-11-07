@@ -69,6 +69,14 @@ Run the server, then open the demo at http://127.0.0.1:8000/ (API docs at `/docs
 uvicorn cacheguard.api:create_default_app --factory
 ```
 
+### Share a public demo link from your PC
+
+No hosting account needed: this starts CacheGuard and a Cloudflare quick tunnel, then prints a public `https://….trycloudflare.com` link (works while the PC and script are running; see [docs/DEPLOY.md](docs/DEPLOY.md#public-demo-from-your-own-pc-free-no-account)):
+
+```bash
+powershell -ExecutionPolicy Bypass -File deploy	unnel.ps1
+```
+
 ### Without a Groq key
 
 CacheGuard falls back to the original 20 Newsgroups search as its backend. Download the [20 Newsgroups dataset](https://archive.ics.uci.edu/dataset/113/twenty+newsgroups), extract it so the folders are at `data/20_newsgroups/<newsgroup>/`, and build the search index (embeds ~19k documents; ~12 minutes on CPU):
@@ -181,6 +189,7 @@ Environment variables (defaults in [config.py](cacheguard/config.py)):
 | `CACHEGUARD_RATE_LIMIT_PER_MINUTE` | `30` | Per client IP on `/query`, `/explain`, `/v1/chat/completions` |
 | `CACHEGUARD_DAILY_BACKEND_CALLS` | `500` | AI calls per UTC day; cache hits keep working after it is spent |
 | `CACHEGUARD_PROXY_HOPS` | `0` | Number of hosting proxies in front; the client IP is that many entries from the right of `X-Forwarded-For` (never the forgeable left side) |
+| `CACHEGUARD_CLIENT_IP_HEADER` | (none) | A header the proxy sets with the client IP, e.g. `cf-connecting-ip` behind Cloudflare; only safe when the app is reachable solely through that proxy |
 | `CACHEGUARD_ADMIN_TOKEN` | (none) | If set, cache admin endpoints need header `X-Admin-Token` |
 | `CACHEGUARD_GUARD` | `on` | `off` uses the plain threshold below instead of the guard |
 | `CACHEGUARD_GUARD_DIR` | `configs/guard` | Calibrated guard settings |

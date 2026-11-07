@@ -50,6 +50,32 @@ Open http://127.0.0.1:8000/.
 one pair of surrounding quotes from its secrets for this reason, but other variables are taken literally, so leave
 quotes out of env files used with Docker.
 
+## Public demo from your own PC (free, no account)
+
+[deploy/tunnel.ps1](../deploy/tunnel.ps1) runs CacheGuard on this machine and exposes it through a Cloudflare
+*quick tunnel*, which needs no Cloudflare account:
+
+```bash
+powershell -ExecutionPolicy Bypass -File deploy\tunnel.ps1
+```
+
+It prints a public `https://<random-words>.trycloudflare.com` link and keeps running until Ctrl+C. Requirements:
+`.env` with `GROQ_API_KEY`, and `cloudflared.exe` in `%LOCALAPPDATA%\cloudflared` (from Cloudflare's
+[GitHub releases](https://github.com/cloudflare/cloudflared/releases); check the published SHA-256).
+
+How it stays safe:
+
+- The server listens on `127.0.0.1` only, so the tunnel is the only way in from outside.
+- Rate limits use `CF-Connecting-IP`, which Cloudflare sets itself (`CACHEGUARD_CLIENT_IP_HEADER`). Verified on a live
+  tunnel: a visitor sending a fake `CF-Connecting-IP` is rejected by Cloudflare (403) before reaching the app, and a
+  fake `X-Forwarded-For` is ignored.
+- A random admin token is generated into `artifacts/admin-token.txt` (git-ignored) and never printed; admin
+  endpoints refuse requests without it.
+- 30 requests per minute per visitor and 300 AI calls per day cap Groq usage; cached answers keep working after.
+
+Limits: the link only works while this PC is on and the script is running, and it changes on every start. It is
+for showing the project live, not a permanent address. For that, use one of the hosting options below.
+
 ## Hosting options
 
 Prices and free-tier rules change often. Check each provider's pricing page before choosing. The notes below

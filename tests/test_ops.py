@@ -95,6 +95,17 @@ def test_forwarded_for_is_ignored_without_proxy_hops(embedder):
     assert client.post("/query", json={"query": "b"}, headers={"X-Forwarded-For": "6.6.6.6"}).status_code == 429
 
 
+def test_trusted_client_ip_header_wins_over_forwarded_for(embedder):
+    client = _xff_client(embedder, rate_limit_per_minute=1, client_ip_header="cf-connecting-ip", proxy_hops=1)
+    h = {"X-Forwarded-For": "1.1.1.1", "CF-Connecting-IP": "8.8.8.8"}
+    assert client.post("/query", json={"query": "a"}, headers=h).status_code == 200
+    # Different forwarded-for, same Cloudflare-reported client: still limited.
+    h2 = {"X-Forwarded-For": "2.2.2.2", "CF-Connecting-IP": "8.8.8.8"}
+    assert client.post("/query", json={"query": "b"}, headers=h2).status_code == 429
+    # Header missing (request did not come through the proxy): fall back to forwarded-for rules.
+    assert client.post("/query", json={"query": "c"}, headers={"X-Forwarded-For": "3.3.3.3"}).status_code == 200
+
+
 def test_whoami_needs_admin_token_and_reports_the_derived_ip(embedder):
     assert _xff_client(embedder).get("/admin/whoami").status_code == 404  # disabled without a token
     client = _xff_client(embedder, admin_token="s3cret", proxy_hops=2)

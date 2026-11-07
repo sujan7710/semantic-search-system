@@ -105,6 +105,10 @@ class Settings:
     # read that many entries from the right of X-Forwarded-For; entries further
     # left are whatever the visitor sent and cannot be trusted. 0 ignores the header.
     proxy_hops: int = 0
+    # A header set by the proxy itself with the client IP (e.g. "cf-connecting-ip"
+    # behind Cloudflare). Takes precedence over proxy_hops. Only safe when the app
+    # cannot be reached except through that proxy.
+    client_ip_header: str = ""
     admin_token: str = ""  # if set, cache admin endpoints require header X-Admin-Token
     allow_unguarded: bool = True  # demo may ask for a plain-threshold decision to compare
 
@@ -146,6 +150,7 @@ class Settings:
             rate_limit_per_minute=_optional_int("RATE_LIMIT_PER_MINUTE", d.rate_limit_per_minute),
             daily_backend_calls=_optional_int("DAILY_BACKEND_CALLS", d.daily_backend_calls),
             proxy_hops=int(_env("PROXY_HOPS", d.proxy_hops)),
+            client_ip_header=_env("CLIENT_IP_HEADER", d.client_ip_header).strip().lower(),
             admin_token=_secret(_env("ADMIN_TOKEN", d.admin_token)),
             allow_unguarded=_flag("ALLOW_UNGUARDED", d.allow_unguarded),
         )
