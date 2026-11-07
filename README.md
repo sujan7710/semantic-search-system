@@ -180,7 +180,7 @@ Environment variables (defaults in [config.py](cacheguard/config.py)):
 | `CACHEGUARD_PRICE_INPUT_PER_M` / `_OUTPUT_PER_M` | `0.075` / `0.30` | USD per 1M tokens, for the "saved" numbers |
 | `CACHEGUARD_RATE_LIMIT_PER_MINUTE` | `30` | Per client IP on `/query`, `/explain`, `/v1/chat/completions` |
 | `CACHEGUARD_DAILY_BACKEND_CALLS` | `500` | AI calls per UTC day; cache hits keep working after it is spent |
-| `CACHEGUARD_TRUST_PROXY` | `off` | Read the client IP from `X-Forwarded-For` (when behind a hosting proxy) |
+| `CACHEGUARD_PROXY_HOPS` | `0` | Number of hosting proxies in front; the client IP is that many entries from the right of `X-Forwarded-For` (never the forgeable left side) |
 | `CACHEGUARD_ADMIN_TOKEN` | (none) | If set, cache admin endpoints need header `X-Admin-Token` |
 | `CACHEGUARD_GUARD` | `on` | `off` uses the plain threshold below instead of the guard |
 | `CACHEGUARD_GUARD_DIR` | `configs/guard` | Calibrated guard settings |

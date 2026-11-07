@@ -70,6 +70,40 @@ def test_request_log_has_decision_but_not_the_question(mock_client, caplog):
     assert "secret" not in caplog.text
 
 
+def _xff_client(embedder, **settings):
+    service = CacheGuardService(embedder, CacheStore(embedder.dim), MockLLMBackend(delay_ms=0))
+    return TestClient(create_app(service, Settings(**settings)))
+
+
+def test_forged_forwarded_for_cannot_dodge_the_rate_limit(embedder):
+    # One proxy in front (proxy_hops=1): it appends the real client address last.
+    client = _xff_client(embedder, rate_limit_per_minute=2, proxy_hops=1)
+    for forged in ("1.1.1.1", "2.2.2.2", "3.3.3.3"):
+        r = client.post("/query", json={"query": "q " + forged}, headers={"X-Forwarded-For": f"{forged}, 9.9.9.9"})
+    assert r.status_code == 429  # all three counted against 9.9.9.9
+
+
+def test_proxy_hops_picks_the_entry_added_by_the_trusted_proxy(embedder):
+    client = _xff_client(embedder, rate_limit_per_minute=1, proxy_hops=1)
+    assert client.post("/query", json={"query": "a"}, headers={"X-Forwarded-For": "5.5.5.5"}).status_code == 200
+    assert client.post("/query", json={"query": "b"}, headers={"X-Forwarded-For": "6.6.6.6"}).status_code == 200  # different client
+
+
+def test_forwarded_for_is_ignored_without_proxy_hops(embedder):
+    client = _xff_client(embedder, rate_limit_per_minute=1)
+    client.post("/query", json={"query": "a"}, headers={"X-Forwarded-For": "5.5.5.5"})
+    assert client.post("/query", json={"query": "b"}, headers={"X-Forwarded-For": "6.6.6.6"}).status_code == 429
+
+
+def test_whoami_needs_admin_token_and_reports_the_derived_ip(embedder):
+    assert _xff_client(embedder).get("/admin/whoami").status_code == 404  # disabled without a token
+    client = _xff_client(embedder, admin_token="s3cret", proxy_hops=2)
+    assert client.get("/admin/whoami").status_code == 403
+    body = client.get("/admin/whoami", headers={"X-Admin-Token": "s3cret", "X-Forwarded-For": "6.6.6.6, 7.7.7.7, 8.8.8.8"}).json()
+    assert body["client_ip_used_for_rate_limits"] == "7.7.7.7"
+    assert body["x_forwarded_for"] == ["6.6.6.6", "7.7.7.7", "8.8.8.8"]
+
+
 def test_mock_backend_and_settings():
     r = MockLLMBackend(delay_ms=0, prompt_tokens=1, completion_tokens=2).respond("hi")
     assert r.answer == "(mock answer) hi" and r.meta["usage"]["total_tokens"] == 3

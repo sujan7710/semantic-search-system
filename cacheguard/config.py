@@ -101,7 +101,10 @@ class Settings:
     # --- public demo protection ------------------------------------------------
     rate_limit_per_minute: int | None = 30  # per client IP, on /query, /explain and /v1/chat/completions
     daily_backend_calls: int | None = 500  # LLM calls per UTC day; cache hits are free
-    trust_proxy: bool = False  # use X-Forwarded-For for the client IP (behind a hosting proxy)
+    # How many proxies the *host* puts in front of the app. The client IP is then
+    # read that many entries from the right of X-Forwarded-For; entries further
+    # left are whatever the visitor sent and cannot be trusted. 0 ignores the header.
+    proxy_hops: int = 0
     admin_token: str = ""  # if set, cache admin endpoints require header X-Admin-Token
     allow_unguarded: bool = True  # demo may ask for a plain-threshold decision to compare
 
@@ -142,7 +145,7 @@ class Settings:
             verifier_memo_size=int(_env("VERIFIER_MEMO_SIZE", d.verifier_memo_size)),
             rate_limit_per_minute=_optional_int("RATE_LIMIT_PER_MINUTE", d.rate_limit_per_minute),
             daily_backend_calls=_optional_int("DAILY_BACKEND_CALLS", d.daily_backend_calls),
-            trust_proxy=_flag("TRUST_PROXY", d.trust_proxy),
+            proxy_hops=int(_env("PROXY_HOPS", d.proxy_hops)),
             admin_token=_secret(_env("ADMIN_TOKEN", d.admin_token)),
             allow_unguarded=_flag("ALLOW_UNGUARDED", d.allow_unguarded),
         )

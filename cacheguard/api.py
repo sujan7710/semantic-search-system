@@ -15,6 +15,7 @@ Endpoints
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import time
@@ -35,6 +36,23 @@ from cacheguard.service import CacheGuardService, QueryResult, build_default_ser
 
 _STATIC = Path(__file__).parent / "static"
 request_log = logging.getLogger("cacheguard.requests")
+
+
+def client_ip(request: Request, proxy_hops: int) -> str:
+    """The client address to rate-limit on.
+
+    Each proxy appends the address it received the request from to
+    X-Forwarded-For, so with N trusted proxies the real client is the N-th
+    entry from the right. Anything further left was sent by the client and
+    can be forged, so it is never used.
+    """
+    peer = request.client.host if request.client else "unknown"
+    if proxy_hops <= 0:
+        return peer
+    forwarded = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+    if len(forwarded) < proxy_hops:
+        return peer  # fewer entries than proxies: the request did not come through them
+    return forwarded[-proxy_hops]
 
 
 def outcome_of(r: QueryResult) -> str:
@@ -198,11 +216,7 @@ def create_app(service: CacheGuardService, settings: Settings | None = None) -> 
         return r
 
     def client_id(request: Request) -> str:
-        if settings.trust_proxy:
-            forwarded = request.headers.get("x-forwarded-for", "")
-            if forwarded:
-                return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+        return client_ip(request, settings.proxy_hops)
 
     def rate_limited(request: Request) -> None:
         if limiter is None:
@@ -217,8 +231,22 @@ def create_app(service: CacheGuardService, settings: Settings | None = None) -> 
             )
 
     def require_admin(x_admin_token: str | None = Header(None)) -> None:
-        if settings.admin_token and x_admin_token != settings.admin_token:
+        if settings.admin_token and not hmac.compare_digest(x_admin_token or "", settings.admin_token):
             raise HTTPException(status_code=403, detail="admin token required")
+
+    @app.get("/admin/whoami", include_in_schema=False)
+    def whoami(request: Request, x_admin_token: str | None = Header(None)) -> dict:
+        """Check the proxy setting on a live deployment: which client IP does the server see?"""
+        if not settings.admin_token:
+            raise HTTPException(status_code=404, detail="set CACHEGUARD_ADMIN_TOKEN to enable this endpoint")
+        require_admin(x_admin_token)
+        forwarded = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+        return {
+            "client_ip_used_for_rate_limits": client_id(request),
+            "proxy_hops": settings.proxy_hops,
+            "x_forwarded_for": forwarded,
+            "socket_peer": request.client.host if request.client else None,
+        }
 
     @app.exception_handler(BudgetExceeded)
     def budget_exceeded(_: Request, exc: BudgetExceeded) -> JSONResponse:

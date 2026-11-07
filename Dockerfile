@@ -42,4 +42,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8000') + '/health', timeout=4)"
 
 # Hosting platforms set PORT; the shell form expands it.
-CMD ["sh", "-c", "exec uvicorn cacheguard.api:create_default_app --factory --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
+# No --forwarded-allow-ips='*': trusting X-Forwarded-For from anyone would let a
+# visitor pick their own IP and dodge rate limits. CacheGuard reads the header
+# itself, counting CACHEGUARD_PROXY_HOPS entries from the right.
+CMD ["sh", "-c", "exec uvicorn cacheguard.api:create_default_app --factory --host 0.0.0.0 --port ${PORT}"]

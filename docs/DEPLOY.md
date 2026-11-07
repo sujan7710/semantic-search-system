@@ -18,11 +18,18 @@ Recommended environment for a public demo:
 
 ```
 GROQ_API_KEY=<secret>
-CACHEGUARD_TRUST_PROXY=on            # platforms put a proxy in front; rate limits need the real client IP
-CACHEGUARD_ADMIN_TOKEN=<random>      # protects cache admin endpoints
-CACHEGUARD_DAILY_BACKEND_CALLS=500   # caps Groq spend per day; cached answers keep working after it
+CACHEGUARD_ADMIN_TOKEN=<secret>      # protects cache admin endpoints and /admin/whoami
+CACHEGUARD_PROXY_HOPS=1              # proxies the platform puts in front (check with /admin/whoami)
+CACHEGUARD_DAILY_BACKEND_CALLS=300   # caps Groq spend per day; cached answers keep working after it
 CACHEGUARD_RATE_LIMIT_PER_MINUTE=30
 ```
+
+**Client IPs behind a proxy.** Rate limits are per client IP, and behind a platform proxy the server only sees the
+proxy. Each proxy appends the address it received the request from to `X-Forwarded-For`, so with N proxies the real
+client is the N-th entry from the right; everything further left is whatever the visitor sent and can be forged.
+CacheGuard reads exactly that entry (`CACHEGUARD_PROXY_HOPS`, default 0 = ignore the header). After deploying, call
+`/admin/whoami` with `X-Admin-Token` and a made-up `X-Forwarded-For` header: the reported client IP must be your real
+address, not the made-up one.
 
 Free tiers that cap memory at 512 MB will not fit this image as it is. Making it fit would mean running both models
 through ONNX Runtime without PyTorch, and re-checking the guard's calibration with the converted models.
@@ -55,16 +62,58 @@ reflect what was checked when this was written (November 2026).
 | **Railway / Fly.io / Render (paid tiers)** | Yes on 1–2 GB plans | Deploy straight from the Dockerfile; usage-based or fixed monthly pricing. Render's free tier is 512 MB, too small. |
 | **A small VM** (any cloud, including always-free VM offers) | Yes | Most control and often cheapest; you manage updates, TLS (e.g. Caddy in front) and restarts yourself. |
 
-### Google Cloud Run (example)
+## Google Cloud Run
 
-With the gcloud CLI installed and a project selected:
+### One-time setup (in your own Google account)
+
+1. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and run `gcloud init` to sign in and
+   create or pick a project.
+2. Link a billing account to the project in the Cloud Console (Billing). Strongly recommended: create a **budget with
+   an email alert** (Billing → Budgets & alerts), e.g. $5/month.
+3. Enable the services the deploy uses:
+
+   ```bash
+   gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
+   ```
+
+4. Create the two secrets in Secret Manager (Console → Security → Secret Manager → Create secret):
+   - `groq-api-key`: your Groq key, **without quotes**.
+   - `cacheguard-admin-token`: a long random string (e.g. output of `python -c "import secrets; print(secrets.token_urlsafe(32))"`). Keep it somewhere safe; it unlocks the admin endpoints.
+5. Let the Cloud Run service account read them (replace `PROJECT_NUMBER`, shown on the console's project dashboard):
+
+   ```bash
+   gcloud secrets add-iam-policy-binding groq-api-key --member=serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com --role=roles/secretmanager.secretAccessor
+   ```
+
+   ```bash
+   gcloud secrets add-iam-policy-binding cacheguard-admin-token --member=serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com --role=roles/secretmanager.secretAccessor
+   ```
+
+### Deploy
+
+From the repository root (Cloud Build builds the Dockerfile remotely; the first build takes several minutes):
 
 ```bash
-gcloud run deploy cacheguard --source . --region us-central1 --memory 2Gi --cpu 2 --port 8000 --allow-unauthenticated --set-env-vars CACHEGUARD_TRUST_PROXY=on,CACHEGUARD_DAILY_BACKEND_CALLS=500 --set-secrets GROQ_API_KEY=groq-api-key:latest
+gcloud run deploy cacheguard --source . --region us-central1 --port 8000 --memory 2Gi --cpu 1 --cpu-boost --concurrency 8 --min-instances 0 --max-instances 2 --timeout 60 --allow-unauthenticated --set-env-vars CACHEGUARD_PROXY_HOPS=1,CACHEGUARD_DAILY_BACKEND_CALLS=300,CACHEGUARD_RATE_LIMIT_PER_MINUTE=30 --set-secrets GROQ_API_KEY=groq-api-key:latest,CACHEGUARD_ADMIN_TOKEN=cacheguard-admin-token:latest
 ```
 
-The secret `groq-api-key` must exist in Secret Manager first. Cloud Run's filesystem is in-memory, so the cache
-resets on each new instance unless a volume is mounted at `/data`.
+Why these settings:
+
+| Setting | Reason |
+|---|---|
+| `--memory 2Gi --cpu 1` | Room for both models; one CPU is enough for a demo, and more instances (not cores) handle bursts |
+| `--concurrency 8` | The verifier is CPU-bound; more parallel requests per instance only queue (see the load test) |
+| `--min-instances 0` | No cost while idle; the first visit after idle waits for a cold start (~15–40 s) |
+| `--max-instances 2` | Caps cost and Groq usage if the link gets popular |
+| `--cpu-boost` | Extra CPU during startup, so the models load faster |
+| `CACHEGUARD_DAILY_BACKEND_CALLS=300` | Caps Groq calls per day per instance |
+
+Cost notes: Cloud Run has a monthly free allowance, and an idle service scales to zero. The ~2.8 GB image is stored in
+Artifact Registry, which has a small free storage allowance; storage beyond it is billed monthly. Cloud Build minutes
+beyond its free allowance are billed too. Check current pricing, and keep the budget alert from step 2.
+
+Cloud Run's filesystem is in memory and per instance, so the cache starts empty on each new instance (after a deploy
+or a scale-from-zero). That is fine for a demo; persistent caching would need a mounted volume or an external store.
 
 ## After deploying
 
